@@ -29,6 +29,12 @@ To enable extensions:
 		"enabled_extension"
 		]
 	```
+ 3. Thid fork has a special extension for the 68kMLA Forum 68kmla.org
+    In the root directory, rename ```config.py.68kmla``` to ```config.py``` to use this.:
+
+	```shell
+	mv config.py.68kmla config.py
+	```
 
 ### Starting MacProxy Plus
 
@@ -37,6 +43,8 @@ On Unix-like systems (such as Linux or macOS), run the ```start_macproxy.sh``` s
 ```shell
 ./start_macproxy.sh
 ```
+Or use the systemd example macproxy_plus.service
+If you want to use a Python Virtual Enviroment please have a look a INSTALL.txt
 
 On Windows, run the analogous PowerShell script, ```start_macproxy.ps1```:
 
@@ -102,9 +110,9 @@ Serves articles from the text-only version of the site (```text.npr.org```) and 
 #### wiby.me
 Browse Wiby's collection of personal, handmade webpages (fixes an issue where clicking "surprise me..." would not redirect users to their final destination).
 
-### Future Work
-- more extensions for more sites
-- presets targeting specific vintage machines/browsers
-- wiki with how-to guides for different machines
+#### 68kmla.org
+Browse the 68kMLA Forum in HTML 2.0. Forum access in ancient browsers like MacWeb, Netscape 1.1, Netscape 3.0, Internet Explorer 4.0.
+HTML 2.0–compliant pages: no CSS, no JavaScript, no SVG—just the core tags your vintage browser understands. Search enabled.
+Image wizardry: avatars, attachments, and emoticons all flattened into simple JPEGs that will be rendered in full color.
 
 Happy Surfing 😎
