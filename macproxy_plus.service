@@ -1,0 +1,24 @@
+# -------------------------------------------------------------------
+#   o See README.md for full usage
+#   o MacProxy Plus -  MacIP.net fork
+#   o An extensible HTTP proxy that connects early computers to the Internet
+#   o HTML 2.0 pages, image re-encoding for colour images
+#   o Extension for 68kMLA forum http://68kmla.org
+#   o Tested in MacWeb, Netscape 1.1 and 3.0 and IE 4.0
+# -------------------------------------------------------------------
+
+[Unit]
+Description=MacProxy Plus. An extensible HTTP proxy that connects early computers to the Internet.
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/macproxy_plus
+# Point PATH at the venv's bin *first*, then fall back to the system
+Environment=PATH=/opt/macproxy_plus/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin
+# Launch the proxy with the venv's python
+ExecStart=/opt/macproxy_plus/venv/bin/python /opt/macproxy_plus/proxy.py
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
