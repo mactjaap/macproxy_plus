@@ -1,0 +1,20 @@
+# INSTALL help
+# install in /opt
+cd /opt
+git clone https://github.com/mactjaap/macproxy_plus.git
+# if running
+systemctl stop macproxy_plus.service
+# create python venv
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+deactivate
+
+cp macproxy_plus.service /etc/systemd/system/macproxy_plus.service
+systemctl daemon-reload
+systemctl start macproxy_plus.service
+systemctl status macproxy_plus.service
+# test
+http_proxy=http://192.168.178.7:5001 lynx --source  http://68kmla.org/bb/index.php
+journalctl -u macproxy_plus.service
