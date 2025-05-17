@@ -66,11 +66,11 @@ def get_username():
 def strip_to_html2(html):
     soup = BeautifulSoup(html, "html.parser")
 
-    # -- NEW: remove any inline base64 images (data: URIs) --------------------
+    #  --- remove any inline base64 images (data: URIs) --------------------
     for img in soup.find_all("img", src=lambda v: v and v.startswith("data:")):
         img.decompose()
 
-    # -- Add two <br> after any `<button type="submit">Search</button>` or `<button type="submit">Log in</button>`
+    # --- add two <br> after any `<button type="submit">Search</button>` or `<button type="submit">Log in</button>`
     for btn2 in soup.find_all("button", {"type": "submit"}):
         txt = btn2.get_text(strip=True).lower()
         if txt == "search":
@@ -81,17 +81,9 @@ def strip_to_html2(html):
             logger.debug("Inserting <br><br> after Log in button")
             btn2.insert_after(soup.new_tag("br"))
             btn2.insert_after(soup.new_tag("br"))
-
-
-     
-
-
-
-
-
-
-    # -- REPLACE: BUTTON turn <button type="submit">....</button>
-    #    f. i. into <input type="submit" value="Log in"> ------------------------
+    
+    # 1) change <button type="submit">....</button>
+    # --- f. i. into <input type="submit" value="Log in"> ------------------------
     for btn in soup.find_all("button", {"type": "submit"}):
         text = btn.get_text(strip=True)
         # handle both "Log in" and "Login"
@@ -103,7 +95,7 @@ def strip_to_html2(html):
                 text
             )
 
-    ## now handle Go-buttons. Will give a submit button, but the form is working properly, so commented 
+    # --- handle Go-buttons. Will give a submit button, but the form is not working properly, so commented 
     #for btn in soup.find_all("button", {"type": "button"}):
     #    if btn.get_text(strip=True).lower() == "go":
     #        new_input = soup.new_tag("input", type="submit", value="Go")
@@ -141,7 +133,7 @@ def strip_to_html2(html):
             logger.debug("Rewrote attachment link %s -> %s", old, new)
 
 
-# -- INSERTION: before every <h1>, drop End 68kMLA navigation menu  ---------
+    # --- INSERTION: before every <h1>, drop End 68kMLA navigation menu  ---------
     for h1 in soup.find_all("h1"):
         comment = Comment(" test ")
         h1.insert_before(comment)
@@ -156,7 +148,7 @@ def strip_to_html2(html):
             a.insert_before(soup.new_tag("br"))
             logger.debug("Inserted <br><br> before avatar link to %s", a['href'])
 
-    # -- INSERTION: add a <br> after the "Advanced search..." link -----------------
+    # --- INSERTION: add a <br> after the "Advanced search..." link -----------------
     for a in soup.find_all("a", href=re.compile(r'^/bb/index\.php\?search/?$')):
         # this matches <a href="/bb/index.php?search/">Advanced search...</a>
         a.insert_after(soup.new_tag("br"))
@@ -201,14 +193,10 @@ def strip_to_html2(html):
             logger.debug("Removed Install-the-app block")
 
 
-    # -- NEW: remove any standalone "Install the app" text nodes ----------------
+    # --- remove any standalone "Install the app" text nodes ----------------
     for txt in soup.find_all(string=lambda s: isinstance(s, NavigableString) and "Install the app" in s):
         logger.debug('Removing text node containing "Install the app"')
         txt.replace_with(txt.replace("Install the app", ""))
-
-    # ... rest of strip_to_html2 ...
-    return str(soup)
-
 
     return str(soup)
 
