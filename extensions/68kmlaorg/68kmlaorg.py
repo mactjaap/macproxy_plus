@@ -516,7 +516,7 @@ def handle_request(req):
 
 
     # fallback
-    #logger.debug("Method not allowed: %s", req.method)
+    # logger.debug("Method not allowed: %s", req.method)
     # return "Method not allowed", 405
 
     # ─── nicer 405 “Method Not Allowed” page ─────────────────────────────────
