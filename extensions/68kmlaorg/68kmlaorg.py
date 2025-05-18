@@ -516,6 +516,16 @@ def handle_request(req):
 
 
     # fallback
-    logger.debug("Method not allowed: %s", req.method)
-    return "Method not allowed", 405
+    #logger.debug("Method not allowed: %s", req.method)
+    # return "Method not allowed", 405
+
+    # ─── nicer 405 “Method Not Allowed” page ─────────────────────────────────
+    logger.debug("Method not allowed: %s %s", req.method, req.full_path)
+    inner = (
+        "<h1>405 – Method Not Allowed</h1>"
+        "<p>Sorry, this proxy can’t handle that request.</p>"
+        "<p><a href=\"/bb/index.php\">Return to 68kMLA Home</a></p>"
+    )
+    # wrap_html2 will automatically add your debug banner, login status, nav, footer, etc.
+    return wrap_html2(inner, "Error – Method Not Allowed", debug), 405
 
