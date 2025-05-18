@@ -29,7 +29,7 @@ To enable extensions:
 		"enabled_extension"
 		]
 	```
- 3. Thid fork has a special extension for the 68kMLA Forum 68kmla.org
+ 3. This fork has a special extension for the 68kMLA Forum 68kmla.org
     In the root directory, rename ```config.py.68kmla``` to ```config.py``` to use this.:
 
 	```shell
