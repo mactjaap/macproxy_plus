@@ -512,12 +512,35 @@ def handle_request(req):
         title = (BeautifulSoup(r.text,'html.parser').title or '68kMLA').string
         return wrap_html2(inner, title, debug), 200
 
+    # ─── handle add-reply POSTs ───────────────────────────────────────────────
+    if req.method == 'POST' and 'add-reply' in full:
+        url = f"https://{DOMAIN}{full}"
+        logger.debug("Proxying add-reply POST to %s", url)
+        r = SESSION.post(
+            url,
+            data=req.form,
+            headers={'User-Agent': request.headers.get('User-Agent','')},
+            allow_redirects=False
+        )
 
+        # follow redirects back into the forum
+        if r.status_code in (301, 302, 303):
+            loc = r.headers.get('Location', '')
+            if loc.startswith('/'):
+                loc = f"https://{DOMAIN}{loc}"
+            logger.debug("add-reply redirected to %s", loc)
+            r2 = SESSION.get(loc, headers={'User-Agent': request.headers.get('User-Agent','')})
+            inner = strip_to_html2(r2.text)
+            title_tag = BeautifulSoup(r2.text, 'html.parser').title
+            title = title_tag.string if title_tag else "Reply Posted"
+            return wrap_html2(inner, title, debug), 200
 
+        # otherwise render whatever the POST returned
+        inner = strip_to_html2(r.text)
+        title_tag = BeautifulSoup(r.text, 'html.parser').title
+        title = title_tag.string if title_tag else "Reply Result"
+        return wrap_html2(inner, title, debug), r.status_code
 
-    # fallback
-    # logger.debug("Method not allowed: %s", req.method)
-    # return "Method not allowed", 405
 
     # ─── nicer 405 “Method Not Allowed” page ─────────────────────────────────
     logger.debug("Method not allowed: %s %s", req.method, req.full_path)
