@@ -70,6 +70,13 @@ def strip_to_html2(html):
     for img in soup.find_all("img", src=lambda v: v and v.startswith("data:")):
         img.decompose()
 
+
+    # remove any inline data: URLs inside style attributes
+    for tag in soup.find_all(attrs={"style": True}):
+        if "data:image" in tag["style"]:
+            logger.debug("Removed style with inline image")
+            del tag["style"]
+
     # --- add two <br> after any `<button type="submit">Search</button>` or `<button type="submit">Log in</button>`
     for btn2 in soup.find_all("button", {"type": "submit"}):
         txt = btn2.get_text(strip=True).lower()
@@ -154,11 +161,21 @@ def strip_to_html2(html):
         a.insert_after(soup.new_tag("br"))
         logger.debug("Inserted <br> after Advanced search link")
 
+
     # 6) strip scripts/styles/comments/etc
     for t in soup.find_all(['script','style','link','noscript','svg']):
         t.decompose()
     for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
         c.extract()
+
+
+    # ── REMOVE: XenForo client-load-time hidden form ─────────────────────────
+    for form in soup.find_all("form", hidden=True):
+        if form.find("input", {"id": "_xfClientLoadTime"}):
+            form.decompose()
+            logger.debug("Removed hidden _xfClientLoadTime form")
+
+
 
     # 7) image stripping or PNG->JPEG re-encode
     if not ENABLE_IMAGES:
@@ -173,7 +190,19 @@ def strip_to_html2(html):
         if tag.name.lower() not in ALLOWED_TAGS:
             tag.unwrap()
 
-
+    # ── WRAP: add <hr><br> around the XenForo credit link ────────────────────────
+    for credit in soup.find_all("a", href=re.compile(r"https?://xenforo\.com"), rel=lambda v: v and "sponsored" in v):
+        credit.insert_before(soup.new_tag("br"))
+        credit.insert_before(soup.new_tag("br"))
+        credit.insert_before(soup.new_tag("hr"))
+        credit.insert_after(soup.new_tag("br"))
+    #   credit.insert_after(soup.new_tag("br"))
+        logger.debug("Inserted <hr><br><br> after XenForo credit link")
+    
+    # --- remove  <a data-xf-click="scroll-to" href="#top">Top</a>
+    for a in soup.find_all("a", attrs={"data-xf-click": "scroll-to"}, string="Top"):
+        a.decompose()
+        logger.debug("Removed 'Top' scroll-to link")
 
     # -- REMOVE: the "Install the app" block -----------------------------------
     for install_button in soup.find_all("button", {"type": "button"}):
@@ -217,6 +246,7 @@ def wrap_html2(inner, title, debug=""):
     ftr = (
         "<hr>\n"
         "<p>&copy; 2025 68kMLA -- "
+        '<a href="#top">Top</a> | '
         '<a href="/bb/index.php?help/">Help</a> | '
         '<a href="/bb/index.php?misc/contact">Contact</a>'
         "</p>\n"
@@ -512,12 +542,35 @@ def handle_request(req):
         title = (BeautifulSoup(r.text,'html.parser').title or '68kMLA').string
         return wrap_html2(inner, title, debug), 200
 
+    # ─── handle add-reply POSTs ───────────────────────────────────────────────
+    if req.method == 'POST' and 'add-reply' in full:
+        url = f"https://{DOMAIN}{full}"
+        logger.debug("Proxying add-reply POST to %s", url)
+        r = SESSION.post(
+            url,
+            data=req.form,
+            headers={'User-Agent': request.headers.get('User-Agent','')},
+            allow_redirects=False
+        )
 
+        # follow redirects back into the forum
+        if r.status_code in (301, 302, 303):
+            loc = r.headers.get('Location', '')
+            if loc.startswith('/'):
+                loc = f"https://{DOMAIN}{loc}"
+            logger.debug("add-reply redirected to %s", loc)
+            r2 = SESSION.get(loc, headers={'User-Agent': request.headers.get('User-Agent','')})
+            inner = strip_to_html2(r2.text)
+            title_tag = BeautifulSoup(r2.text, 'html.parser').title
+            title = title_tag.string if title_tag else "Reply Posted"
+            return wrap_html2(inner, title, debug), 200
 
+        # otherwise render whatever the POST returned
+        inner = strip_to_html2(r.text)
+        title_tag = BeautifulSoup(r.text, 'html.parser').title
+        title = title_tag.string if title_tag else "Reply Result"
+        return wrap_html2(inner, title, debug), r.status_code
 
-    # fallback
-    # logger.debug("Method not allowed: %s", req.method)
-    # return "Method not allowed", 405
 
     # ─── nicer 405 “Method Not Allowed” page ─────────────────────────────────
     logger.debug("Method not allowed: %s %s", req.method, req.full_path)
