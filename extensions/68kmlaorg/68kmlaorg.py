@@ -5,8 +5,11 @@ from PIL import Image
 import io
 
 # --- CONFIG ----------------------------------------------------------------
+
 ENABLE_DEBUG  = False     # True -> show debug banners + DEBUG logs
 ENABLE_IMAGES = True     # True -> allow <img>; False -> strip all images
+
+# --- END CONFIG ------------------------------------------------------------
 
 SESSION = requests.Session()
 DOMAIN  = "68kmla.org"
@@ -17,7 +20,7 @@ ALLOWED_TAGS = {
     'html','head','title',
     'body','center',
     'h1','h2','h3','h4','h5','h6',
-    'p','ul','li','a','br',
+    'p','ul','li','a','br','hr',
     'form','input','textarea','select','option','button',
     'img','b'
 }
@@ -65,6 +68,11 @@ def get_username():
 # --- strip & rewrite to HTML 2.0 --------------------------------------------
 def strip_to_html2(html):
     soup = BeautifulSoup(html, "html.parser")
+
+    # --- remove all existing <hr> tags before applying modifications ------------
+    for hr in soup.find_all("hr"):
+        hr.decompose()
+    logger.debug("Removed all existing <hr> tags from upstream HTML")
 
     #  --- remove any inline base64 images (data: URIs) --------------------
     for img in soup.find_all("img", src=lambda v: v and v.startswith("data:")):
@@ -115,9 +123,9 @@ def strip_to_html2(html):
         warn.decompose()
 
     # 3) replace any "Loading..." text with "Click here"
-    for txt in soup.find_all(string=lambda t: isinstance(t, str) and "Loading..." in t):
-        logger.debug("Replacing Loading... node")
-        txt.replace_with(txt.replace("Loading...", "<a href='#'>Click here</a>"))
+    for txt in soup.find_all(string=lambda t: isinstance(t, str) and "Loading…" in t):
+        logger.debug("Replacing Loading… node")
+        txt.replace_with(txt.replace("Loading…", ""))
 
     # 4) drop the two logo links (home buttons)
     for a in soup.find_all('a', href=re.compile(r'^https?://68kmla\.org/bb/?$')):
@@ -141,11 +149,16 @@ def strip_to_html2(html):
 
 
     # --- INSERTION: before every <h1>, drop End 68kMLA navigation menu  ---------
+    # for h1 in soup.find_all("h1"):
+    #    comment = Comment(" test ")
+    #    h1.insert_before(comment)
+    #    h1.insert_before(BeautifulSoup("||||||||||||||||||||||||||||||  <hr>", "html.parser"))
+    #
+    #    logger.debug("Inserted <hr> ..... end 68kMLA navigation menu before <h1>")
+
     for h1 in soup.find_all("h1"):
-        comment = Comment(" test ")
-        h1.insert_before(comment)
-        h1.insert_before(BeautifulSoup("<center><h3>[   ----------   End 68kMLA navigation menu  ----------   ] </h3></center>", "html.parser"))
-        logger.debug("Inserted <h3>End 68kMLA navigation menu</h3> before <h1>")
+        h1.insert_before(soup.new_tag("hr"))
+        logger.debug("Inserted <hr> before <h1>")
 
     # 5b) insert two <br> before every avatar link ------------------------
     for a in soup.find_all('a'):
@@ -239,9 +252,9 @@ def wrap_html2(inner, title, debug=""):
     user = get_username()
     lg  = f"<p>Logged in as {user}</p>" if user else ""
     nav = (
-        "<center>\n"
-        "  <h3>[   ----------   68kMLA navigation menu  ----------   ] </h3>\n"
-        "</center>\n"
+        "\n"
+        "<hr>\n"
+        "\n"
     )
     ftr = (
         "<hr>\n"
