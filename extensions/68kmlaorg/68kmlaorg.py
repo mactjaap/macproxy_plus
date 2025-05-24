@@ -5,7 +5,7 @@ from PIL import Image
 import io
 
 # --- CONFIG ----------------------------------------------------------------
-ENABLE_DEBUG  = False     # True -> show debug banners + DEBUG logs
+ENABLE_DEBUG  = True     # True -> show debug banners + DEBUG logs
 ENABLE_IMAGES = True     # True -> allow <img>; False -> strip all images
 
 SESSION = requests.Session()
@@ -144,7 +144,7 @@ def strip_to_html2(html):
     for h1 in soup.find_all("h1"):
         comment = Comment(" test ")
         h1.insert_before(comment)
-        h1.insert_before(BeautifulSoup("<center><h3>[   ----------   End 68kMLA navigation menu  ----------   ] </h3></center>", "html.parser"))
+        h1.insert_before(BeautifulSoup("<h3>[   ----------   End 68kMLA navigation menu  ----------   ] </h3>", "html.parser"))
         logger.debug("Inserted <h3>End 68kMLA navigation menu</h3> before <h1>")
 
     # 5b) insert two <br> before every avatar link ------------------------
@@ -239,9 +239,9 @@ def wrap_html2(inner, title, debug=""):
     user = get_username()
     lg  = f"<p>Logged in as {user}</p>" if user else ""
     nav = (
-        "<center>\n"
+        "\n"
         "  <h3>[   ----------   68kMLA navigation menu  ----------   ] </h3>\n"
-        "</center>\n"
+        "\n"
     )
     ftr = (
         "<hr>\n"
