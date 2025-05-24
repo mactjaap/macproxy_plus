@@ -82,86 +82,59 @@ def reencode_image(content):
 
 def strip_to_html2(html):
     soup = BeautifulSoup(html.replace('\u00A0', ' '), "html.parser")
-    # [Same cleaning logic as before, omitted for brevity]
+
+    for img in soup.find_all("img", src=lambda v: v and v.startswith("data:")):
+        img.decompose()
+
+    for tag in soup.find_all(attrs={"style": True}):
+        if "data:image" in tag["style"]:
+            logger.debug("Removing inline style with data:image")
+            del tag["style"]
+
+    for style_tag in soup.find_all("style"):
+        if style_tag.string and "data:image" in style_tag.string:
+            logger.debug("Removing <style> block with data:image")
+            style_tag.decompose()
+
+    # [Keep the rest of your cleaning rules here as needed]
+
     return str(soup)
 
 def handle_request(req):
-    full = req.full_path
-    path = req.path.lstrip('/')
-    qs = req.query_string.decode('utf-8')
-    debug = ""
-    if ENABLE_DEBUG:
-        debug = (
-            f"<b>Proxy Request:</b><br>"
-            f"Method: {req.method}<br>"
-            f"Path:   {req.path}<br>"
-            f"Headers:{dict(req.headers)}<br><br>"
+    try:
+        full = req.full_path
+        path = req.path.lstrip('/')
+        qs = req.query_string.decode('utf-8')
+        debug = ""
+        if ENABLE_DEBUG:
+            debug = (
+                f"<b>Proxy Request:</b><br>"
+                f"Method: {req.method}<br>"
+                f"Path:   {req.path}<br>"
+                f"Headers:{dict(req.headers)}<br><br>"
+            )
+        logger.debug("Handling %s %s", req.method, req.full_path)
+
+        url = f"https://{DOMAIN}{full}"
+        headers = get_user_agent(req)
+
+        if req.method == 'GET' and ('attachments/' in full or '/data/avatars/' in full or '/data/assets/' in full):
+            r = SESSION.get(url)
+            img_bytes, out_ct = reencode_image(r.content) if r.status_code == 200 and 'image/' in r.headers.get('Content-Type', '').lower() else (r.content, r.headers.get('Content-Type', ''))
+            return Response(img_bytes, status=200, headers={'Content-Type': out_ct, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0'}, direct_passthrough=True)
+
+        r = SESSION.get(url, headers=headers)
+        inner = strip_to_html2(r.text)
+        title_tag = BeautifulSoup(r.text, 'html.parser').title
+        title = title_tag.string if title_tag else '68kMLA'
+        return wrap_html2(inner, title, debug), 200
+
+    except Exception as e:
+        logger.error("Exception in handle_request: %r", e)
+        inner = (
+            "<h1>500 – Internal Server Error</h1>"
+            f"<p>{e}</p>"
+            "<p><a href=\"/bb/index.php\">Return to 68kMLA Home</a></p>"
         )
-    logger.debug("Handling %s %s", req.method, req.full_path)
+        return wrap_html2(inner, "Error – Internal Server Error", ""), 500
 
-    url = f"https://{DOMAIN}{full}"
-    headers = get_user_agent(req)
-
-    if req.method == 'GET' and ('attachments/' in full or '/data/avatars/' in full or '/data/assets/' in full):
-        r = SESSION.get(url)
-        img_bytes, out_ct = reencode_image(r.content) if r.status_code == 200 and 'image/' in r.headers.get('Content-Type', '').lower() else (r.content, r.headers.get('Content-Type', ''))
-        return Response(img_bytes, status=200, headers={'Content-Type': out_ct, 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0'}, direct_passthrough=True)
-
-    if req.method == 'GET' and path.endswith('index.php') and 'search/' in qs:
-        r = SESSION.get(url, headers=headers)
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or 'Search').string
-        return wrap_html2(inner, title, debug), 200
-
-    if req.method == 'POST' and 'search/search' in full:
-        q = req.form.get('keywords', '').strip()
-        if not q:
-            return wrap_html2("<p>No search term</p>", "Error", debug), 400
-        return _do_search(q, req, debug)
-
-    if req.method == 'GET' and path.rstrip('/') == 'search' and 'q' in req.args:
-        q = req.args.get('q', '').strip()
-        if not q:
-            return wrap_html2("<p>No search term</p>", "Error", debug), 400
-        return _do_search(q, req, debug)
-
-    if req.method == 'GET' and 'login/' in full and 'login/login' not in full:
-        r = SESSION.get(f"https://{DOMAIN}/bb/index.php?login/", headers=headers)
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or 'Login').string
-        return wrap_html2(inner, title, debug), 200
-
-    if req.method == 'POST' and 'login/login' in full:
-        return _do_login(req, debug)
-
-    if req.method == 'GET' and (not path or path in ['bb', 'bb/', 'bb/index.php']) and (not qs or qs.startswith('images=')):
-        r = SESSION.get(f"https://{DOMAIN}/bb/index.php", headers=headers)
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA Home').string
-        return wrap_html2(inner, title, debug), 200
-
-    if req.method == 'GET' and 'index.php' in path:
-        r = SESSION.get(url, headers=headers)
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
-        return wrap_html2(inner, title, debug), 200
-
-    if req.method == 'POST' and 'add-reply' in full:
-        r = SESSION.post(url, data=req.form, headers=headers, allow_redirects=False)
-        if r.status_code in (301, 302, 303):
-            loc = r.headers.get('Location', '')
-            loc = f"https://{DOMAIN}{loc}" if loc.startswith('/') else loc
-            r2 = SESSION.get(loc, headers=headers)
-            inner = strip_to_html2(r2.text)
-            title = (BeautifulSoup(r2.text, 'html.parser').title or "Reply Posted").string
-            return wrap_html2(inner, title, debug), 200
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or "Reply Result").string
-        return wrap_html2(inner, title, debug), r.status_code
-
-    inner = (
-        "<h1>405 – Method Not Allowed</h1>"
-        "<p>Sorry, this proxy can’t handle that request.</p>"
-        "<p><a href=\"/bb/index.php\">Return to 68kMLA Home</a></p>"
-    )
-    return wrap_html2(inner, "Error – Method Not Allowed", debug), 405
