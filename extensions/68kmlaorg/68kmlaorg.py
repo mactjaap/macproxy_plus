@@ -416,11 +416,11 @@ def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> 
         <form>
             <label for="menu">Personal menu:</label>
             <select id="menu" onchange="window.location.href=this.value;">
-                <option value="/bb/index.php">{user} id:{user_id}</option>
+                <option value="/bb/index.php">{user}</option>
                 <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
                 <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
                 <option value="/bb/index.php?account/account-details">Account details</option>
-                <option value="/bb/index.php?whats-new/news-feed/">------------</option>
+                <option value="">------------</option>
                 <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
                 <option value="/bb/index.php?whats-new/media/">New media</option>
                 <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
@@ -432,15 +432,12 @@ def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> 
                 <option value="/bb/index.php?resources/latest-reviews">Resources latest reviews</option>
                 <option value="/bb/index.php?members/">Members</option>
                 <option value="/bb/index.php?online/">Current visitors</option>
-                <option value="/forums/archive/">Snitz Archive</option>
-                <option value="https://www.patreon.com/68kmla">Patreon</option>
                 <option value="/bb/index.php?account/">Account</option>
                 <option value="/bb/index.php?conversations/">Conversations</option>
                 <option value="/bb/index.php?conversations/add">Start conversation</option>
                 <option value="/bb/index.php?account/alerts">Alerts</option>
                 <option value="/bb/index.php?account/preferences">Preferences</option>
                 <option value="/bb/index.php?search/">Search</option>
-                <option value="/forums/archive/">Snitz Archive</option>
             </select>
         </form>
         <br>
