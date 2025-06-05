@@ -104,6 +104,20 @@ def handle_matching_extension(module):
         override_extension = module.__name__
     return resp
 
+
+
+
+
+
+
+
+
+
+# ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
+    
+
+
+
 # ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
 def process_response(response, url):
     # normalize to (content, status, headers)
@@ -125,7 +139,7 @@ def process_response(response, url):
 
     # ── IMAGE HANDLING ───────────────────────────────────────────────────────
 
-    # ── UNIVERSAL IMAGE CATCH & RE-ENCODE ───────────────────────────────────────
+    # ── UNIVERSAL IMAGE CATCH & RE-ENCODE ────────────────────────────────────
     if ctype.startswith('image/'):
         subtype = ctype.split('/', 1)[1].split(';', 1)[0]
         data = content
@@ -150,30 +164,43 @@ def process_response(response, url):
         })
         return resp
 
-
-
-
-
-
-
-
     # ── CSS/JS TRANSCODING ────────────────────────────────────────────────────
-    if ctype in ('text/css','text/javascript','application/javascript'):
-        txt = transcode_content(content)
-        r = Response(txt, status)
+    if ctype in ('text/css', 'text/javascript', 'application/javascript'):
+        # Decode to string for transcoding, then re-encode to bytes
+        decoded_content = content.decode('utf-8', errors='replace') if isinstance(content, (bytes, bytearray)) else str(content)
+        txt = transcode_content(decoded_content)
+        final_css = txt.encode('utf-8', errors='replace')
+        r = Response(final_css, status)
         r.headers['Content-Type'] = ctype
         return r
 
     # ── HTML REWRITING ────────────────────────────────────────────────────────
     non_transcode = (
-        'application/octet-stream','application/pdf','application/zip',
-        'audio/','video/','text/plain'
+        'application/octet-stream', 'application/pdf', 'application/zip',
+        'audio/', 'video/', 'text/plain'
     )
+
+    # Determine if we should treat this as HTML/text to rewrite
     if ctype.startswith('text/html') or not any(ctype.startswith(n) for n in non_transcode):
-        if isinstance(content, bytes):
-            content = content.decode('utf-8', 'replace')
-        content = transcode_html(
-            content, url,
+        # (A) Ensure we have a Python string to run regex/transcode on:
+        if isinstance(content, (bytes, bytearray)):
+            html_content_str = content.decode('utf-8', 'replace')
+        else:
+            # content is already a str
+            html_content_str = str(content)
+
+        # (B) Strip any leading <!doctype …> (case-insensitive; only the first)
+        html_content_str = re.sub(r'(?i)<!doctype.*?>', '', html_content_str, count=1)
+
+        # (C) Strip any <!DOCTYPE …> declarations entirely
+        html_content_str = re.sub(r'(?i)<!DOCTYPE[^>]*>\s*', '', html_content_str)
+
+        # (D) Collapse any “long” <html …> tag down to exactly "<html>"
+        html_content_str = re.sub(r'(?i)<html\b[^>]*>', '<html>', html_content_str)
+
+        # (E) Now hand off to the existing transcode_html function
+        final_transcoded = transcode_html(
+            html_content_str, url,
             whitelisted_domains   = config.WHITELISTED_DOMAINS,
             simplify_html         = config.SIMPLIFY_HTML,
             tags_to_unwrap        = config.TAGS_TO_UNWRAP,
@@ -183,12 +210,46 @@ def process_response(response, url):
             conversion_table      = config.CONVERSION_TABLE
         )
 
-    # build final Flask response
-    resp = Response(content, status)
+        # (F) Ensure the final payload is bytes
+        if isinstance(final_transcoded, (bytes, bytearray)):
+            final_response_content = final_transcoded
+        else:
+            final_response_content = final_transcoded.encode('utf-8', errors='replace')
+    else:
+        # For other content types (PDF, zip, etc.), leave as raw bytes
+        final_response_content = content
+
+    # ── BUILD FINAL FLASK RESPONSE ─────────────────────────────────────────────
+    resp = Response(final_response_content, status)
     for k, v in headers.items():
-        if k.lower() not in ('content-encoding','content-length'):
+        if k.lower() not in (
+            'content-encoding',
+            'content-length',
+            'transfer-encoding',
+            'connection',
+            'proxy-authenticate',
+            'proxy-authorization'
+        ):
             resp.headers[k] = v
+
+    # Ensure Transfer-Encoding is not accidentally forwarded
+    if 'Transfer-Encoding' in resp.headers:
+        del resp.headers['Transfer-Encoding']
+
     return resp
+
+
+
+
+
+
+
+
+
+
+# ── END HTML REWRITING ────────────────────────────────────────────────────
+
+
 
 # ─── DEFAULT PROXY ──────────────────────────────────────────────────────────
 def handle_default_request():
