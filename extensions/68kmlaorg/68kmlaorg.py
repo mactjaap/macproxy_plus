@@ -593,8 +593,8 @@ def _do_login(req, debug: str):
 
 # ─── Main Entry Point ────────────────────────────────────────────────────────
 def handle_request(req):
-    full = req.full_path            # e.g. "/forums/archive/mainforums.jpg"
-    path = req.path.lstrip('/')     # e.g. "forums/archive/mainforums.jpg"
+    full = req.full_path            # e.g. "/bb/proxy.php?image=…"
+    path = req.path.lstrip('/')     # e.g. "bb/proxy.php"
     qs   = req.query_string.decode('utf-8')
     debug = ""
     if ENABLE_DEBUG:
@@ -606,11 +606,9 @@ def handle_request(req):
         )
     logger.debug("Handling %s %s", req.method, req.full_path)
 
-# ---enter block ----
-
-    # ── BYPASS HTML WRAP FOR XenForo proxy.php IMAGE URLs ───────────────────
-    # If the URL is something like /bb/proxy.php?image=… , fetch it as a raw image.
-    if req.method == 'GET' and 'proxy.php' in path and 'image=' in qs:
+    # ── BYPASS + CONVERT XenForo proxy.php IMAGE URLs ────────────────────────
+    # If this is a GET to “proxy.php?image=…”, treat it as a raw image:
+    if req.method == 'GET' and path.endswith('proxy.php') and 'image=' in qs:
         url = f"https://{DOMAIN}/{path}?{qs}"
         logger.debug("Fetching XenForo proxy.php image: %s", url)
         r = SESSION.get(url)
@@ -618,17 +616,18 @@ def handle_request(req):
         logger.debug("Upstream proxy.php returned %d bytes @ %s", len(r.content), orig_ct)
 
         img_bytes = r.content
-        out_ct = orig_ct
+        out_ct    = orig_ct
 
-        # Only re-encode if it's a real image (flattening PNG→JPEG if needed)
+        # Always try to re-encode (flatten PNG→JPEG, etc.)
         if r.status_code == 200 and orig_ct.startswith('image/'):
             try:
                 img = Image.open(io.BytesIO(r.content))
                 logger.debug("PIL opened proxied image: format=%s mode=%s size=%s",
                              img.format, img.mode, img.size)
 
+                # If it has transparency, paste onto white
                 if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
-                    logger.debug("Proxied image has transparency; compositing on white")
+                    logger.debug("Proxied image has transparency; flattening onto white")
                     bg = Image.new('RGB', img.size, (255, 255, 255))
                     rgba = img.convert('RGBA')
                     bg.paste(rgba, mask=rgba.split()[-1])
@@ -639,10 +638,10 @@ def handle_request(req):
                 buf = io.BytesIO()
                 img.save(buf, 'JPEG', progressive=False)
                 img_bytes = buf.getvalue()
-                out_ct = 'image/jpeg'
+                out_ct    = 'image/jpeg'
                 logger.debug("Re‐encoded proxied image to JPEG, size=%d", len(img_bytes))
             except Exception as e:
-                logger.debug("PIL failed for proxied image; sending raw bytes: %r", e)
+                logger.debug("PIL failed for proxied image; returning raw bytes: %r", e)
 
         return Response(
             img_bytes,
@@ -656,6 +655,7 @@ def handle_request(req):
             direct_passthrough=True
         )
 
+    # …rest of your existing handle_request(…) code continues here…
 
 # --- end enter block ----
 
