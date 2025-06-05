@@ -606,6 +606,59 @@ def handle_request(req):
         )
     logger.debug("Handling %s %s", req.method, req.full_path)
 
+# ---enter block ----
+
+    # ── BYPASS HTML WRAP FOR XenForo proxy.php IMAGE URLs ───────────────────
+    # If the URL is something like /bb/proxy.php?image=… , fetch it as a raw image.
+    if req.method == 'GET' and 'proxy.php' in path and 'image=' in qs:
+        url = f"https://{DOMAIN}/{path}?{qs}"
+        logger.debug("Fetching XenForo proxy.php image: %s", url)
+        r = SESSION.get(url)
+        orig_ct = r.headers.get('Content-Type', '').lower()
+        logger.debug("Upstream proxy.php returned %d bytes @ %s", len(r.content), orig_ct)
+
+        img_bytes = r.content
+        out_ct = orig_ct
+
+        # Only re-encode if it's a real image (flattening PNG→JPEG if needed)
+        if r.status_code == 200 and orig_ct.startswith('image/'):
+            try:
+                img = Image.open(io.BytesIO(r.content))
+                logger.debug("PIL opened proxied image: format=%s mode=%s size=%s",
+                             img.format, img.mode, img.size)
+
+                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                    logger.debug("Proxied image has transparency; compositing on white")
+                    bg = Image.new('RGB', img.size, (255, 255, 255))
+                    rgba = img.convert('RGBA')
+                    bg.paste(rgba, mask=rgba.split()[-1])
+                    img = bg
+                else:
+                    img = img.convert('RGB')
+
+                buf = io.BytesIO()
+                img.save(buf, 'JPEG', progressive=False)
+                img_bytes = buf.getvalue()
+                out_ct = 'image/jpeg'
+                logger.debug("Re‐encoded proxied image to JPEG, size=%d", len(img_bytes))
+            except Exception as e:
+                logger.debug("PIL failed for proxied image; sending raw bytes: %r", e)
+
+        return Response(
+            img_bytes,
+            status=200,
+            headers={
+                'Content-Type':   out_ct,
+                'Cache-Control':  'no-cache, no-store, must-revalidate',
+                'Pragma':         'no-cache',
+                'Expires':        '0',
+            },
+            direct_passthrough=True
+        )
+
+
+# --- end enter block ----
+
     # ─── 1) attachments → binary + PIL re-encode (preserves colour, flattens transparency)
     if req.method == 'GET' and 'attachments/' in full:
         url = f"https://{DOMAIN}{full}"
