@@ -51,7 +51,7 @@ ch.setFormatter(logging.Formatter('[68kMLA] %(levelname)s: %(message)s'))
 logger.addHandler(ch)
 
 
-# ─── Helper: Fetch Username ───────────────────────────────────────────────────
+# ─── Helper: Fetch Username (zet USERNAME enkel voor weergave, maar login is uit) ─
 def get_username():
     global USERNAME
     if USERNAME is None:
@@ -120,93 +120,56 @@ def strip_to_html2(html: str) -> str:
         a.decompose()
     logger.debug("Removed upstream “What's new” and “Search” links")
 
-# old style... just rip of all ul.... but then you will loose them in posts too....
-
-    # Remove all upstream <ul> menus
-    # for ul in soup.find_all("ul"):
-    #     ul.decompose()
-    # logger.debug("Removed all upstream <ul> menus")
-
-# new style.... try to preserve them in posts
-
     # ── REMOVE: any <ul> whose descendants have <a data-nav-id="…"> *unless* they also
-    #    contain a <li data-xf-list-type="ul"> (i.e. content‐lists)
+    #    contain a <li data-xf-list-type="ul"> (i.e. content-lists)
     for ul in soup.find_all("ul"):
-        # only remove if it has at least one <a data-nav-id="…"> and no <li data-xf-list-type="ul">
         has_nav_id = bool(ul.find("a", attrs={"data-nav-id": True}))
         has_xf_list = bool(ul.find("li", attrs={"data-xf-list-type": "ul"}))
         if has_nav_id and not has_xf_list:
             ul.decompose()
             logger.debug("Removed upstream XenForo menu <ul> (had data-nav-id, no data-xf-list-type)")
 
-# and remove this part:
-
-# <ul itemscope="" itemtype="https://schema.org/BreadcrumbList">
-# <li itemprop="itemListElement" itemscope="" itemtype="https://schema.org/ListItem">
-# <a href="http://68kmla.org/bb/" itemprop="item">
-# Home
-# </a>
-# ....etc
-
     # ── REMOVE: breadcrumb <ul> blocks with schema.org/BreadcrumbList ─────────
     for ul in soup.find_all("ul", attrs={"itemtype": "https://schema.org/BreadcrumbList"}):
         ul.decompose()
         logger.debug("Removed breadcrumb <ul> (schema.org/BreadcrumbList)")
 
-
-# remove even more.............
-
-
     # ── REMOVE: conversations menu <ul> ───────────────────────────────────────
     for ul in soup.find_all("ul"):
-        # if any <a> inside points to conversations (e.g. ?conversations/), delete the whole <ul>
         if ul.find("a", href=re.compile(r"^/bb/index\.php\?conversations/")):
             ul.decompose()
             logger.debug("Removed conversations <ul> (Show all / Start a new conversation)")
 
-
-# remove Conversations when logged in
-
-    # ── REMOVE logged-in “Conversations” block (with its <ul>) ─────────
+    # ── REMOVE logged-in “Conversations” block ─────────────────────────────────
     for h3 in soup.find_all("h3", string=lambda t: t and t.strip() == "Conversations"):
-        # If there is a <ul> immediately after that <h3>, remove it too
         next_ul = h3.find_next_sibling("ul")
         if next_ul:
             next_ul.decompose()
         h3.decompose()
         logger.debug("Removed logged-in Conversations section")
 
-
     # ── REMOVE: Alerts anchor, heading, and related <ul> ──────────────────────
-    #  Remove the <a aria-label="Alerts" …> element
     alerts_anchor = soup.find("a", attrs={"aria-label": "Alerts"})
     if alerts_anchor:
         alerts_anchor.decompose()
         logger.debug("Removed Alerts <a aria-label='Alerts'>")
-
-    #  Remove the <h3>Alerts</h3> (if present)
     alerts_h3 = soup.find("h3", string="Alerts")
     if alerts_h3:
-        #  Remove the <h3> itself
         alerts_h3.decompose()
         logger.debug("Removed <h3>Alerts</h3>")
-
-        #  Also remove the next <ul> that contains “Show all / Mark read / Preferences”
         next_ul = alerts_h3.find_next_sibling("ul")
         if next_ul:
             next_ul.decompose()
-            logger.debug("Removed <ul> under Alerts heading")
+            logger.debug("Removed <ul> onder Alerts heading")
 
-
-
-    # Remove login/register links
+    # Remove login/register links (want we hebben login uit)
     for a in soup.find_all("a", href=re.compile(r"/bb/index\.php\?login/|/bb/index\.php\?register/")):
         a.decompose()
     logger.debug("Removed upstream login/register links")
 
-    # Insert custom navigation header
+    # Insert custom navigation header zonder login/register
     custom_nav = BeautifulSoup('''
-        <!-- TEST MENU -->
+        <!-- Aangepaste menu -->
         <a href="/bb/index.php">Home</a> |
         <a href="/bb/index.php?forums/">Forums</a> |
         <a href="/bb/index.php?forums/68kmla-wiki.13/">Wiki</a> |
@@ -216,8 +179,6 @@ def strip_to_html2(html: str) -> str:
         <a href="/bb/index.php?members/">Members</a> |
         <a href="/forums/archive/">Snitz Archive</a> |
         <a href="https://www.patreon.com/68kmla">Patreon</a> |
-        <a href="/bb/index.php?login/">Log in</a> |
-        <a href="/bb/index.php?register/">Register</a> |
         <a href="/bb/index.php?search/">Search</a>
         <br>
         <form>
@@ -238,18 +199,13 @@ def strip_to_html2(html: str) -> str:
                 <option value="/bb/index.php?online/">Current visitors</option>
                 <option value="/forums/archive/">Snitz Archive</option>
                 <option value="https://www.patreon.com/68kmla">Patreon</option>
-                <option value="/bb/index.php?account/">Account</option>
-                <option value="/bb/index.php?conversations/">Conversations</option>
-                <option value="/bb/index.php?conversations/add">Start conversation</option>
-                <option value="/bb/index.php?account/alerts">Alerts</option>
-                <option value="/bb/index.php?account/preferences">Preferences</option>
                 <option value="/bb/index.php?search/">Search</option>
                 <option value="/forums/archive/">Snitz Archive</option>
                 <option value="/bb/index.php?forums/68kmla-wiki.13/">Wiki</option>
             </select>
         </form>
         <hr>
-        <!-- END TEST MENU -->
+        <!-- EINDE MENU -->
     ''', 'html.parser')
 
     body = soup.body or soup
@@ -259,18 +215,18 @@ def strip_to_html2(html: str) -> str:
         body.append(custom_nav)
     logger.debug("Inserted custom navigation header")
 
-    # Insert two <br> after Search or Log in buttons
+    # Insert twee <br> na “Search” knop
     for btn2 in soup.find_all("button", {"type": "submit"}):
         txt = btn2.get_text(strip=True).lower()
-        if txt in ("search", "log in", "login"):
-            logger.debug("Inserting <br><br> after '%s' button", txt)
+        if txt in ("search", "find", "go"):
+            logger.debug("Inserting <br><br> after '%s' knop", txt)
             btn2.insert_after(soup.new_tag("br"))
             btn2.insert_after(soup.new_tag("br"))
 
-    # Replace any <button> whose text matches: login, log in, search, send, find, go
+    # Vervang <button> met tekst “search”, “send”, “find”, “go” door <input type="submit">
     for btn in list(soup.find_all("button")):
         text = btn.get_text(strip=True).lower()
-        if text in ("login", "log in", "search", "send", "find", "go"):
+        if text in ("search", "send", "find", "go"):
             new_input = soup.new_tag("input", type="submit", value=text.capitalize())
             btn.insert_after(new_input)
             btn.decompose()
@@ -281,9 +237,9 @@ def strip_to_html2(html: str) -> str:
         logger.debug("Removing browser-warning div")
         warn.decompose()
 
-    # Replace “Loading…” text
+    # Replace “Loading…” tekst
     for txt in soup.find_all(string=lambda t: isinstance(t, str) and "Loading…" in t):
-        logger.debug("Replacing 'Loading…' text")
+        logger.debug("Replacing 'Loading…' tekst")
         txt.replace_with(txt.replace("Loading…", ""))
 
     # Drop logo links (home buttons)
@@ -292,12 +248,12 @@ def strip_to_html2(html: str) -> str:
             logger.debug("Removing logo link")
             a.decompose()
 
-    # Remove “Menu” button
+    # Remove “Menu” knop
     for btn in soup.find_all('button', attrs={"aria-label": "Menu"}):
-        logger.debug("Removing Menu button")
+        logger.debug("Removing Menu knop")
         btn.decompose()
 
-    # Rewrite attachment-preview links to direct image URL
+    # Rewrite attachment-preview links naar directe image URL
     for a in soup.find_all('a', href=re.compile(r'^/bb/index\.php\?attachments/')):
         old = a['href']
         img = a.find('img')
@@ -306,12 +262,12 @@ def strip_to_html2(html: str) -> str:
             a['href'] = new
             logger.debug("Rewrote attachment link %s → %s", old, new)
 
-    # Insert <hr> before every <h1>
+    # Voeg <hr> vóór elke <h1>
     for h1 in soup.find_all("h1"):
         h1.insert_before(soup.new_tag("hr"))
         logger.debug("Inserted <hr> before <h1>")
 
-    # Insert two <br> before every avatar link
+    # Voeg twee <br> vóór elke avatar link
     for a in soup.find_all('a'):
         img = a.find('img', src=re.compile(r'/bb/data/avatars/'))
         if img:
@@ -319,31 +275,31 @@ def strip_to_html2(html: str) -> str:
             a.insert_before(soup.new_tag("br"))
             logger.debug("Inserted <br><br> before avatar link to %s", a['href'])
 
-    # Remove <script>, <style>, <link>, <noscript>, <svg>, and comments
+    # Verwijder alle <script>, <style>, <link>, <noscript>, <svg> en comments
     for t in soup.find_all(['script','style','link','noscript','svg']):
         t.decompose()
     for c in soup.find_all(string=lambda x: isinstance(x, Comment)):
         c.extract()
 
-    # Remove XenForo client-load-time hidden form
+    # Verwijder XenForo client-load-time hidden form
     for form in soup.find_all("form", hidden=True):
         if form.find("input", {"id": "_xfClientLoadTime"}):
             form.decompose()
             logger.debug("Removed hidden _xfClientLoadTime form")
 
-    # Image stripping or PNG→JPEG re-encode (tags remain; actual fetch in handle_request)
+    # Image stripping of PNG→JPEG re-encode (tags blijven; ophalen in proxy)
     if not ENABLE_IMAGES:
         for img in soup.find_all('img'):
             img.decompose()
     else:
         pass
 
-    # Unwrap tags not valid in HTML 2.0
+    # Ontwrap tags die niet in HTML 2.0 mogen
     for tag in list(soup.find_all()):
         if tag.name.lower() not in ALLOWED_TAGS:
             tag.unwrap()
 
-    # Insert <hr><br> around XenForo credit link
+    # Voeg <hr><br> rond XenForo credit link
     for credit in soup.find_all("a", href=re.compile(r"https?://xenforo\.com"), rel=lambda v: v and "sponsored" in v):
         credit.insert_before(soup.new_tag("br"))
         credit.insert_before(soup.new_tag("br"))
@@ -351,12 +307,12 @@ def strip_to_html2(html: str) -> str:
         credit.insert_after(soup.new_tag("br"))
         logger.debug("Inserted <hr><br><br> after XenForo credit link")
 
-    # Remove “Top” scroll-to link
+    # Verwijder “Top” scroll-to link
     for a in soup.find_all("a", attrs={"data-xf-click": "scroll-to"}, string="Top"):
         a.decompose()
         logger.debug("Removed 'Top' scroll-to link")
 
-    # Remove “Install the app” block
+    # Verwijder “Install the app” blok
     for install_button in soup.find_all("button", {"type": "button"}):
         if install_button.get_text(strip=True) == "Install":
             prev = install_button.find_previous_sibling()
@@ -368,12 +324,12 @@ def strip_to_html2(html: str) -> str:
             install_button.decompose()
             logger.debug("Removed Install-the-app block")
 
-    # Remove any standalone “Install the app” text nodes
+    # Verwijder standalone “Install the app” tekst nodes
     for txt in soup.find_all(string=lambda s: isinstance(s, NavigableString) and "Install the app" in s):
         logger.debug('Removing text node containing "Install the app"')
         txt.replace_with(txt.replace("Install the app", ""))
 
-    # Strip unwanted attributes & set our own on <body>
+    # Strip ongewenste attributes & stel eigen <body> in
     body = soup.find("body")
     if body and "data-template" in body.attrs:
         logger.debug("Removing data-template attribute from <body>")
@@ -389,30 +345,20 @@ def clean_empty_lines(s: str) -> str:
 
 # ─── Wrap into minimal HTML 2.0 skeleton ────────────────────────────────────
 def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> str:
-    """
-    inner: Stripped-down HTML 2.0 (string)
-    title: Page <title>
-    debug: Optional debug banner HTML
-    user_id: The string from <span data-user-id="…"> (or None)
-    """
     dbg = f"<p style='color:red'>{debug}</p>" if ENABLE_DEBUG and debug else ""
 
-    # Show first 200 chars of inner in the log to verify where <span data-user-id> might have gone
     snippet = inner[:200].replace("\n", " ").replace("\r", " ")
     logger.debug("wrap_html2: inner snippet (first 200 chars): %r", snippet)
 
     if user_id:
-        logger.debug("wrap_html2: Received user_id -> %r", user_id)
+        logger.debug("wrap_html2: Received user_id → %r", user_id)
     else:
         logger.debug("wrap_html2: user_id was None")
 
     user = get_username()
-
     if user:
-        # Insert the username and the dropdown, including the (ID: …) label
         lg = f"""
         <hr>
-        <!-- Debug: user_id was: {user_id} -->
         <form>
             <label for="menu">Personal menu:</label>
             <select id="menu" onchange="window.location.href=this.value;">
@@ -420,7 +366,7 @@ def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> 
                 <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
                 <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
                 <option value="/bb/index.php?account/account-details">Account details</option>
-                <option value="">------------</option>
+                <option value="">-------------</option>
                 <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
                 <option value="/bb/index.php?whats-new/media/">New media</option>
                 <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
@@ -456,7 +402,6 @@ def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> 
         f"{dbg}{lg}{nav}{inner}{ftr}"
         "</body></html>\n"
     )
-    # Replace first <body…> with custom bgcolor
     html = re.sub(r"<body[^>]*>", '<body bgcolor="lightblue">', html, count=1)
     return clean_empty_lines(html)
 
@@ -490,7 +435,6 @@ def _do_search(q: str, req, debug: str):
             f"Status: {r1.status_code}<br>Headers: {dict(r1.headers)}<br><br>"
         )
 
-    # Follow redirect if necessary
     if r1.status_code in (301, 302, 303):
         loc = r1.headers.get('Location', '')
         if loc.startswith('/'):
@@ -502,7 +446,6 @@ def _do_search(q: str, req, debug: str):
                 "<b>68kMLA Response:</b><br>"
                 f"Status: {r2.status_code}<br>Headers: {dict(r2.headers)}<br><br>"
             )
-        # Extract user_id from r2.text before stripping
         orig_soup = BeautifulSoup(r2.text, "html.parser")
         span = orig_soup.find("span", attrs={"data-user-id": True})
         if span:
@@ -514,7 +457,6 @@ def _do_search(q: str, req, debug: str):
         title = (BeautifulSoup(r2.text, 'html.parser').title or f"Search: {q}").string
         return wrap_html2(inner, title, debug, user_id), 200
 
-    # Otherwise
     orig_soup = BeautifulSoup(r1.text, "html.parser")
     span = orig_soup.find("span", attrs={"data-user-id": True})
     if span:
@@ -525,70 +467,6 @@ def _do_search(q: str, req, debug: str):
     inner = strip_to_html2(r1.text)
     title = (BeautifulSoup(r1.text, 'html.parser').title or f"Search: {q}").string
     return wrap_html2(inner, title, debug, user_id), r1.status_code
-
-
-# ─── Login Flow ─────────────────────────────────────────────────────────────
-def _do_login(req, debug: str):
-    url0 = f"https://{DOMAIN}/bb/index.php?login/"
-    r0   = SESSION.get(url0, headers={'User-Agent': req.headers.get('User-Agent','')})
-    if ENABLE_DEBUG:
-        debug += (
-            "<b>68kMLA Response:</b><br>"
-            f"Status: {r0.status_code}<br>Headers: {dict(r0.headers)}<br><br>"
-        )
-
-    s0   = BeautifulSoup(r0.text, 'html.parser')
-    xf   = s0.find('input', {'name': '_xfToken'})
-    data = dict(req.form)
-    if xf:
-        data['_xfToken'] = xf['value']
-
-    r1 = SESSION.post(
-        f"https://{DOMAIN}/bb/index.php?login/login",
-        headers={'User-Agent': req.headers.get('User-Agent',''), 'Referer': url0},
-        data=data,
-        allow_redirects=False
-    )
-    if ENABLE_DEBUG:
-        debug += (
-            "<b>68kMLA Response:</b><br>"
-            f"Status: {r1.status_code}<br>Headers: {dict(r1.headers)}<br><br>"
-        )
-
-    # If redirect (successful login), follow
-    if r1.status_code in (301, 302, 303):
-        loc = r1.headers.get('Location', '')
-        if loc.startswith('/'):
-            loc = f"https://{DOMAIN}{loc}"
-        r2 = SESSION.get(loc, headers={'User-Agent': request.headers.get('User-Agent','')})
-        if ENABLE_DEBUG:
-            debug += (
-                "<b>68kMLA Response:</b><br>"
-                f"Status: {r2.status_code}<br>Headers: {dict(r2.headers)}<br><br>"
-            )
-        # Extract user_id from the logged-in page
-        orig_soup = BeautifulSoup(r2.text, "html.parser")
-        span = orig_soup.find("span", attrs={"data-user-id": True})
-        if span:
-            user_id = span["data-user-id"]
-        else:
-            user_id = None
-
-        inner = strip_to_html2(r2.text)
-        title = (BeautifulSoup(r2.text, 'html.parser').title or "Logged In").string
-        return wrap_html2(inner, title, debug, user_id), 200
-
-    # If login failed (no redirect), show whatever r1 returned
-    orig_soup = BeautifulSoup(r1.text, "html.parser")
-    span = orig_soup.find("span", attrs={"data-user-id": True})
-    if span:
-        user_id = span["data-user-id"]
-    else:
-        user_id = None
-
-    inner = strip_to_html2(r1.text)
-    title = (BeautifulSoup(r1.text, 'html.parser').title or "Login Result").string
-    return wrap_html2(inner, title, debug, user_id), 200
 
 
 # ─── Main Entry Point ────────────────────────────────────────────────────────
@@ -606,7 +484,7 @@ def handle_request(req):
         )
     logger.debug("Handling %s %s", req.method, req.full_path)
 
-    # ─── 1) attachments → binary + PIL re-encode (preserves colour, flattens transparency)
+    # ─── 1) attachments → binary + PIL re-encode ─────────────────────────────────
     if req.method == 'GET' and 'attachments/' in full:
         url = f"https://{DOMAIN}{full}"
         logger.debug("Fetching attachment: %s", url)
@@ -617,14 +495,11 @@ def handle_request(req):
         img_bytes = r.content
         out_ct    = orig_ct
 
-        # only try to re-encode real images
         if r.status_code == 200 and orig_ct.startswith('image/'):
             try:
                 img = Image.open(io.BytesIO(r.content))
                 logger.debug("PIL opened attachment: format=%s mode=%s size=%s",
                              img.format, img.mode, img.size)
-
-                # flatten alpha onto white if needed
                 if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
                     logger.debug("Attachment has transparency, compositing on white")
                     bg = Image.new('RGB', img.size, (255,255,255))
@@ -664,7 +539,6 @@ def handle_request(req):
         try:
             buf = io.BytesIO(r.content)
             img = Image.open(buf)
-            # Flatten alpha onto white if needed
             if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
                 bg = Image.new('RGB', img.size, (255,255,255))
                 bg.paste(img.convert('RGBA'), mask=img.convert('RGBA').split()[-1])
@@ -692,7 +566,7 @@ def handle_request(req):
             direct_passthrough=True
         )
 
-    # ─── 3) Direct Snitz Archive (static HTML + images under /forums/archive/) ─
+    # ─── 3) Direct Snitz Archive ─────────────────────────────────────────────────
     if req.method == 'GET' and path.startswith('forums/archive'):
         url = f"https://{DOMAIN}/{path}"
         logger.debug("Fetching Snitz Archive: %s", url)
@@ -745,33 +619,7 @@ def handle_request(req):
             return wrap_html2("<p>No search term</p>", "Error", debug, None), 400
         return _do_search(q, req, debug)
 
-    # ─── 7) GET login form ────────────────────────────────────────────────────
-    if req.method == 'GET' and 'login/' in full and 'login/login' not in full:
-        url = f"https://{DOMAIN}/bb/index.php?login/"
-        logger.debug("Fetching login form: %s", url)
-        r = SESSION.get(url, headers={'User-Agent': req.headers.get('User-Agent','')})
-        if ENABLE_DEBUG:
-            debug += (
-                "<b>68kMLA Response:</b><br>"
-                f"Status: {r.status_code}<br>Headers: {dict(r.headers)}<br><br>"
-            )
-
-        orig_soup = BeautifulSoup(r.text, "html.parser")
-        span = orig_soup.find("span", attrs={"data-user-id": True})
-        if span:
-            user_id = span["data-user-id"]
-        else:
-            user_id = None
-
-        inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or 'Login').string
-        return wrap_html2(inner, title, debug, user_id), 200
-
-    # ─── 8) POST login ─────────────────────────────────────────────────────────
-    if req.method == 'POST' and 'login/login' in full:
-        return _do_login(req, debug)
-
-    # ─── 9) Home page ─────────────────────────────────────────────────────────
+    # ─── 7) Home page ─────────────────────────────────────────────────────────
     if (
         req.method == 'GET'
         and (not path or path in ['bb', 'bb/', 'bb/index.php'])
@@ -797,7 +645,7 @@ def handle_request(req):
         title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA Home').string
         return wrap_html2(inner, title, debug, user_id), 200
 
-    # ─── 10) All other index.php pages ────────────────────────────────────────
+    # ─── 8) All other index.php pages ─────────────────────────────────────────
     if req.method == 'GET' and 'index.php' in path:
         url = f"https://{DOMAIN}/{path}" + (f'?{qs}' if qs else '')
         logger.debug("Fetching other page: %s", url)
@@ -819,7 +667,7 @@ def handle_request(req):
         title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
         return wrap_html2(inner, title, debug, user_id), 200
 
-    # ─── 11) Handle add-reply POSTs ───────────────────────────────────────────
+    # ─── 9) Handle add-reply POSTs ───────────────────────────────────────────
     if req.method == 'POST' and 'add-reply' in full:
         url = f"https://{DOMAIN}{full}"
         logger.debug("Proxying add-reply POST to %s", url)
@@ -830,7 +678,6 @@ def handle_request(req):
             allow_redirects=False
         )
 
-        # Follow redirects back into forum
         if r.status_code in (301, 302, 303):
             loc = r.headers.get('Location', '')
             if loc.startswith('/'):
@@ -849,7 +696,6 @@ def handle_request(req):
             title = title_tag.string if title_tag else "Reply Posted"
             return wrap_html2(inner, title, debug, user_id), 200
 
-        # Otherwise render POST result
         orig_soup = BeautifulSoup(r.text, "html.parser")
         span = orig_soup.find("span", attrs={"data-user-id": True})
         if span:
@@ -862,11 +708,11 @@ def handle_request(req):
         title = title_tag.string if title_tag else "Reply Result"
         return wrap_html2(inner, title, debug, user_id), r.status_code
 
-    # ─── Method Not Allowed (if we fall through) ──────────────────────────────
+    # ─── Method Not Allowed (als we hier belanden) ─────────────────────────────
     logger.debug("Method not allowed: %s %s", req.method, req.full_path)
     inner = (
         "<h1>405 – Method Not Allowed</h1>"
-        "<p>Sorry, this proxy can’t handle that request.</p>"
-        "<p><a href=\"/bb/index.php\">Return to 68kMLA Home</a></p>"
+        "<p>Sorry, deze proxy kan dat verzoek niet verwerken.</p>"
+        "<p><a href=\"/bb/index.php\">Terug naar 68kMLA Home</a></p>"
     )
     return wrap_html2(inner, "Error – Method Not Allowed", debug, None), 405

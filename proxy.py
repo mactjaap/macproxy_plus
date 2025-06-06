@@ -99,31 +99,18 @@ def handle_request(path):
         # 2) Host‐check: is dit verzoek naar proxy.macip.net?
         host = request.host.split(':')[0]
         if host == PROXY_DOMAIN:
-            # Blokkeer alle login‐pogingen
+            # Blokkeer login‐pogingen door “login” in path
             if 'login' in path.lower():
                 return Response(
                     "<html><body><h1>Login disabled</h1></body></html>",
                     403,
                     {"Content-Type": "text/html"}
                 )
-            # Anders gewoon via 68kmlaorg‐extensie
+            # Anders: route via 68kmlaorg‐extensie
             if '68kmlaorg' in extensions:
-                # Verwijder inkomende cookies
-                req_headers = prepare_headers()
-                # Pas request.url aan naar upstream
-                upstream_path = request.path
-                qs = request.query_string.decode('utf-8')
-                target = f"https://{UPSTREAM_DOMAIN}{upstream_path}"
-                if qs:
-                    target += "?" + qs
-                # Forward zonder cookies
-                if request.method == 'POST':
-                    r = requests.post(target, data=request.form, headers=req_headers, allow_redirects=True)
-                else:
-                    r = requests.get(target, params=request.args, headers=req_headers, allow_redirects=True)
-                # Strip Set-Cookie
-                resp_headers = {k: v for k, v in r.headers.items() if k.lower() != 'set-cookie'}
-                return process_response((r.content, r.status_code, resp_headers), target)
+                module = extensions['68kmlaorg']
+                resp = handle_matching_extension(module)
+                return process_response(resp, request.url)
             else:
                 app.logger.error("68kmlaorg‐extensie is niet ingeladen maar proxy.macip.net kreeg een verzoek.")
                 abort(500, ERROR_HEADER + " → 68kmlaorg‐extensie niet gevonden")
@@ -256,14 +243,19 @@ def handle_default_request():
     if qs:
         upstream += "?" + qs
 
-    # Verwijder inkomende cookies
+    # Route via extension voor alle andere paths
+    if '68kmlaorg' in extensions:
+        module = extensions['68kmlaorg']
+        resp = handle_matching_extension(module)
+        return process_response(resp, request.url)
+
+    # Indien extensie ontbreekt, val terug op direct verzoek zonder cookies
     req_headers = prepare_headers()
     try:
         if request.method == 'POST':
             r = requests.post(upstream, data=request.form, headers=req_headers, allow_redirects=True)
         else:
             r = requests.get(upstream, params=request.args, headers=req_headers, allow_redirects=True)
-        # Strip Set-Cookie
         resp_headers = {k: v for k, v in r.headers.items() if k.lower() != 'set-cookie'}
         return process_response((r.content, r.status_code, resp_headers), upstream)
     except Exception as e:
