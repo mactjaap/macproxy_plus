@@ -22,18 +22,15 @@ from utils.system_utils import load_preset
 # ─── APP SETUP ───────────────────────────────────────────────────────────────
 os.environ['FLASK_ENV'] = 'development'
 app = Flask(__name__)
-session = requests.Session()
 
 # ─── GLOBALS & CONFIG ────────────────────────────────────────────────────────
 HTTP_ERRORS        = (403, 404, 500, 503, 504)
 ERROR_HEADER       = "[[Macproxy Encountered an Error]]"
 override_extension = None
 
-# Het domein waarop deze proxy luistert:
 PROXY_DOMAIN       = "proxy.macip.net"
-
-# User-Agent string (Lynx–compatibel)
-USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
+UPSTREAM_DOMAIN    = "68kmla.org"
+USER_AGENT         = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
 
 # ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
 def clear_image_cache():
@@ -60,39 +57,14 @@ for ext in ENABLED_EXTENSIONS:
 def serve_cached_image(filename):
     return send_from_directory(CACHE_DIR, filename, mimetype='image/gif')
 
-# ─── MAIN ROUTE ──────────────────────────────────────────────────────────────
-@app.route('/', defaults={'path': '/'}, methods=['GET','POST'])
-@app.route('/<path:path>', methods=['GET','POST'])
-def handle_request(path):
-    global override_extension
-
-    # 1) Override extension?
-    if override_extension:
-        resp = handle_override_extension(request)
-        if resp is not None:
-            return process_response(resp, request.url)
-
-    # 2) Domain‐specific extension?
-    #    – Elke inkomende host == PROXY_DOMAIN → stuur naar 68kmlaorg–extensie
-    host = urlparse(request.url).netloc.split(':')[0]
-    if host == PROXY_DOMAIN and '68kmlaorg' in extensions:
-        module = extensions['68kmlaorg']
-        return process_response(handle_matching_extension(module), request.url)
-
-    # 2b) Anders: check of host overeenkomt met een ander extension–domein
-    module = find_matching_extension(host)
-    if module:
-        return process_response(handle_matching_extension(module), request.url)
-
-    # 3) Fallback: default proxy (nooit echt gebruikt voor 68kmla–flow)
-    return handle_default_request()
-
+# ─── HELPERS VOOR EXTENSIONS ─────────────────────────────────────────────────
 def handle_override_extension(req):
     global override_extension
     name = override_extension.split('.')[-1]
     if name in extensions:
-        resp = extensions[name].handle_request(req)
-        if hasattr(extensions[name], 'get_override_status') and not extensions[name].get_override_status():
+        module = extensions[name]
+        resp = module.handle_request(req)
+        if hasattr(module, 'get_override_status') and not module.get_override_status():
             override_extension = None
         return resp
     override_extension = None
@@ -111,9 +83,66 @@ def handle_matching_extension(module):
         override_extension = module.__name__
     return resp
 
+# ─── MAIN ROUTE ──────────────────────────────────────────────────────────────
+@app.route('/', defaults={'path': ''}, methods=['GET','POST'])
+@app.route('/<path:path>', methods=['GET','POST'])
+def handle_request(path):
+    global override_extension
+
+    try:
+        # 1) Override‐extension?
+        if override_extension:
+            resp = handle_override_extension(request)
+            if resp is not None:
+                return process_response(resp, request.url)
+
+        # 2) Host‐check: is dit verzoek naar proxy.macip.net?
+        host = request.host.split(':')[0]
+        if host == PROXY_DOMAIN:
+            # Blokkeer alle login‐pogingen
+            if 'login' in path.lower():
+                return Response(
+                    "<html><body><h1>Login disabled</h1></body></html>",
+                    403,
+                    {"Content-Type": "text/html"}
+                )
+            # Anders gewoon via 68kmlaorg‐extensie
+            if '68kmlaorg' in extensions:
+                # Verwijder inkomende cookies
+                req_headers = prepare_headers()
+                # Pas request.url aan naar upstream
+                upstream_path = request.path
+                qs = request.query_string.decode('utf-8')
+                target = f"https://{UPSTREAM_DOMAIN}{upstream_path}"
+                if qs:
+                    target += "?" + qs
+                # Forward zonder cookies
+                if request.method == 'POST':
+                    r = requests.post(target, data=request.form, headers=req_headers, allow_redirects=True)
+                else:
+                    r = requests.get(target, params=request.args, headers=req_headers, allow_redirects=True)
+                # Strip Set-Cookie
+                resp_headers = {k: v for k, v in r.headers.items() if k.lower() != 'set-cookie'}
+                return process_response((r.content, r.status_code, resp_headers), target)
+            else:
+                app.logger.error("68kmlaorg‐extensie is niet ingeladen maar proxy.macip.net kreeg een verzoek.")
+                abort(500, ERROR_HEADER + " → 68kmlaorg‐extensie niet gevonden")
+
+        # 3) Andere extension‐host (bv. reddit.com, wikipedia.org, etc.)
+        module = find_matching_extension(host)
+        if module:
+            resp = handle_matching_extension(module)
+            return process_response(resp, request.url)
+
+        # 4) Fallback: alle andere hosts → standaard doorsturen naar 68kmla.org
+        return handle_default_request()
+
+    except Exception as e:
+        app.logger.exception("Onverwachte fout in handle_request:")
+        abort(500, ERROR_HEADER + str(e))
+
 # ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
 def process_response(response, url):
-    # normalize to (content, status, headers)
     if isinstance(response, tuple):
         if len(response) == 3:
             content, status, headers = response
@@ -127,6 +156,9 @@ def process_response(response, url):
     else:
         content, status, headers = response, 200, {}
 
+    # Verwijder eventuele Set-Cookie in response headers
+    headers = {k: v for k, v in headers.items() if k.lower() != 'set-cookie'}
+
     ctype = headers.get('Content-Type', '').lower()
     app.logger.debug(f"Processing response voor {url} → Content-Type: {ctype}")
 
@@ -134,18 +166,14 @@ def process_response(response, url):
     if ctype.startswith('image/'):
         subtype = ctype.split('/', 1)[1].split(';', 1)[0]
         data = content
-
-        # animated GIFs: leave alone
         if subtype == 'gif':
             img_bytes, out_ct = data, 'image/gif'
         else:
-            # alles anders → JPEG via PIL
             try:
                 img_bytes, out_ct = _reencode_image(data)
             except Exception as e:
                 app.logger.debug(f"PIL re-encode failed voor {subtype}: {e}")
                 img_bytes, out_ct = data, ctype
-
         resp = Response(img_bytes, status)
         resp.headers['Content-Type'] = out_ct
         resp.headers.update({
@@ -175,7 +203,6 @@ def process_response(response, url):
         else:
             html_content_str = str(content)
 
-        # Strip <!doctype> en <html ...> tags
         html_content_str = re.sub(r'(?i)<!doctype.*?>', '', html_content_str, count=1)
         html_content_str = re.sub(r'(?i)<!DOCTYPE[^>]*>\s*', '', html_content_str)
         html_content_str = re.sub(r'(?i)<html\b[^>]*>', '<html>', html_content_str)
@@ -190,6 +217,14 @@ def process_response(response, url):
             convert_characters    = config.CONVERT_CHARACTERS,
             conversion_table      = config.CONVERSION_TABLE
         )
+
+        try:
+            html_str = final_transcoded if isinstance(final_transcoded, str) else final_transcoded.decode('utf-8', 'replace')
+            html_str = re.sub(r'action="https?://68kmla\.org', 'action="', html_str)
+            html_str = re.sub(r'href="https?://68kmla\.org', 'href="', html_str)
+            final_transcoded = html_str
+        except Exception:
+            pass
 
         if isinstance(final_transcoded, (bytes, bytearray)):
             final_response_content = final_transcoded
@@ -213,25 +248,24 @@ def process_response(response, url):
         del resp.headers['Transfer-Encoding']
     return resp
 
-# ─── DEFAULT PROXY (wordt nu zelden gebruikt omdat we alles via 68kmlaorg doen) ─
+# ─── DEFAULT PROXY ──────────────────────────────────────────────────────────
 def handle_default_request():
-    # Bouw de target-URL expliciet naar 68kmla.org
     path_only = request.path
     qs = request.query_string.decode('utf-8')
-    upstream = f"https://68kmla.org{path_only}"
+    upstream = f"https://{UPSTREAM_DOMAIN}{path_only}"
     if qs:
         upstream += "?" + qs
 
+    # Verwijder inkomende cookies
+    req_headers = prepare_headers()
     try:
-        r = session.request(
-            method=request.method,
-            url=upstream,
-            params=request.args if request.method == 'GET' else None,
-            data=request.form if request.method == 'POST' else None,
-            headers=prepare_headers(),
-            allow_redirects=True
-        )
-        return process_response((r.content, r.status_code, dict(r.headers)), upstream)
+        if request.method == 'POST':
+            r = requests.post(upstream, data=request.form, headers=req_headers, allow_redirects=True)
+        else:
+            r = requests.get(upstream, params=request.args, headers=req_headers, allow_redirects=True)
+        # Strip Set-Cookie
+        resp_headers = {k: v for k, v in r.headers.items() if k.lower() != 'set-cookie'}
+        return process_response((r.content, r.status_code, resp_headers), upstream)
     except Exception as e:
         abort(500, ERROR_HEADER + str(e))
 
@@ -248,7 +282,6 @@ def prepare_headers():
 def _reencode_image(data: bytes) -> tuple[bytes,str]:
     buff = io.BytesIO(data)
     img = Image.open(buff)
-    # flatten transparency
     if img.mode in ('RGBA','LA') or (img.mode=='P' and 'transparency' in img.info):
         bg = Image.new('RGB', img.size, (255,255,255))
         rgba = img.convert('RGBA')
@@ -267,7 +300,7 @@ def inject_body_bgcolor(resp: Response):
     if not ct.startswith("text/html"):
         return resp
     host = urlparse(request.url).netloc.split(":",1)[0]
-    if host != "68kmla.org":
+    if host != UPSTREAM_DOMAIN:
         return resp
     html = resp.get_data(as_text=True)
     new  = re.sub(r"<body[^>]*>", '<body bgcolor="#F2F8FD">', html, count=1, flags=re.IGNORECASE)
