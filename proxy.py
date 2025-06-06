@@ -29,9 +29,10 @@ HTTP_ERRORS        = (403, 404, 500, 503, 504)
 ERROR_HEADER       = "[[Macproxy Encountered an Error]]"
 override_extension = None
 
-# default user_agent
-# USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus)"
-# for better working on some sites
+# Het domein waarop deze proxy luistert:
+PROXY_DOMAIN       = "proxy.macip.net"
+
+# User-Agent string (Lynx–compatibel)
 USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
 
 # ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
@@ -72,12 +73,18 @@ def handle_request(path):
             return process_response(resp, request.url)
 
     # 2) Domain‐specific extension?
+    #    – Elke inkomende host == PROXY_DOMAIN → stuur naar 68kmlaorg–extensie
     host = urlparse(request.url).netloc.split(':')[0]
+    if host == PROXY_DOMAIN and '68kmlaorg' in extensions:
+        module = extensions['68kmlaorg']
+        return process_response(handle_matching_extension(module), request.url)
+
+    # 2b) Anders: check of host overeenkomt met een ander extension–domein
     module = find_matching_extension(host)
     if module:
         return process_response(handle_matching_extension(module), request.url)
 
-    # 3) Fallback: default proxy (includes images)
+    # 3) Fallback: default proxy (nooit echt gebruikt voor 68kmla–flow)
     return handle_default_request()
 
 def handle_override_extension(req):
@@ -104,20 +111,6 @@ def handle_matching_extension(module):
         override_extension = module.__name__
     return resp
 
-
-
-
-
-
-
-
-
-
-# ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
-    
-
-
-
 # ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
 def process_response(response, url):
     # normalize to (content, status, headers)
@@ -135,11 +128,9 @@ def process_response(response, url):
         content, status, headers = response, 200, {}
 
     ctype = headers.get('Content-Type', '').lower()
-    app.logger.debug(f"Processing response for {url} → Content-Type: {ctype}")
+    app.logger.debug(f"Processing response voor {url} → Content-Type: {ctype}")
 
     # ── IMAGE HANDLING ───────────────────────────────────────────────────────
-
-    # ── UNIVERSAL IMAGE CATCH & RE-ENCODE ────────────────────────────────────
     if ctype.startswith('image/'):
         subtype = ctype.split('/', 1)[1].split(';', 1)[0]
         data = content
@@ -148,11 +139,11 @@ def process_response(response, url):
         if subtype == 'gif':
             img_bytes, out_ct = data, 'image/gif'
         else:
-            # everything else → JPEG via PIL
+            # alles anders → JPEG via PIL
             try:
                 img_bytes, out_ct = _reencode_image(data)
             except Exception as e:
-                app.logger.debug(f"PIL re-encode failed for {subtype}: {e}")
+                app.logger.debug(f"PIL re-encode failed voor {subtype}: {e}")
                 img_bytes, out_ct = data, ctype
 
         resp = Response(img_bytes, status)
@@ -166,7 +157,6 @@ def process_response(response, url):
 
     # ── CSS/JS TRANSCODING ────────────────────────────────────────────────────
     if ctype in ('text/css', 'text/javascript', 'application/javascript'):
-        # Decode to string for transcoding, then re-encode to bytes
         decoded_content = content.decode('utf-8', errors='replace') if isinstance(content, (bytes, bytearray)) else str(content)
         txt = transcode_content(decoded_content)
         final_css = txt.encode('utf-8', errors='replace')
@@ -179,26 +169,17 @@ def process_response(response, url):
         'application/octet-stream', 'application/pdf', 'application/zip',
         'audio/', 'video/', 'text/plain'
     )
-
-    # Determine if we should treat this as HTML/text to rewrite
     if ctype.startswith('text/html') or not any(ctype.startswith(n) for n in non_transcode):
-        # (A) Ensure we have a Python string to run regex/transcode on:
         if isinstance(content, (bytes, bytearray)):
             html_content_str = content.decode('utf-8', 'replace')
         else:
-            # content is already a str
             html_content_str = str(content)
 
-        # (B) Strip any leading <!doctype …> (case-insensitive; only the first)
+        # Strip <!doctype> en <html ...> tags
         html_content_str = re.sub(r'(?i)<!doctype.*?>', '', html_content_str, count=1)
-
-        # (C) Strip any <!DOCTYPE …> declarations entirely
         html_content_str = re.sub(r'(?i)<!DOCTYPE[^>]*>\s*', '', html_content_str)
-
-        # (D) Collapse any “long” <html …> tag down to exactly "<html>"
         html_content_str = re.sub(r'(?i)<html\b[^>]*>', '<html>', html_content_str)
 
-        # (E) Now hand off to the existing transcode_html function
         final_transcoded = transcode_html(
             html_content_str, url,
             whitelisted_domains   = config.WHITELISTED_DOMAINS,
@@ -210,16 +191,13 @@ def process_response(response, url):
             conversion_table      = config.CONVERSION_TABLE
         )
 
-        # (F) Ensure the final payload is bytes
         if isinstance(final_transcoded, (bytes, bytearray)):
             final_response_content = final_transcoded
         else:
             final_response_content = final_transcoded.encode('utf-8', errors='replace')
     else:
-        # For other content types (PDF, zip, etc.), leave as raw bytes
         final_response_content = content
 
-    # ── BUILD FINAL FLASK RESPONSE ─────────────────────────────────────────────
     resp = Response(final_response_content, status)
     for k, v in headers.items():
         if k.lower() not in (
@@ -231,39 +209,29 @@ def process_response(response, url):
             'proxy-authorization'
         ):
             resp.headers[k] = v
-
-    # Ensure Transfer-Encoding is not accidentally forwarded
     if 'Transfer-Encoding' in resp.headers:
         del resp.headers['Transfer-Encoding']
-
     return resp
 
-
-
-
-
-
-
-
-
-
-# ── END HTML REWRITING ────────────────────────────────────────────────────
-
-
-
-# ─── DEFAULT PROXY ──────────────────────────────────────────────────────────
+# ─── DEFAULT PROXY (wordt nu zelden gebruikt omdat we alles via 68kmlaorg doen) ─
 def handle_default_request():
-    upstream = request.url.replace('https://', 'http://', 1)
+    # Bouw de target-URL expliciet naar 68kmla.org
+    path_only = request.path
+    qs = request.query_string.decode('utf-8')
+    upstream = f"https://68kmla.org{path_only}"
+    if qs:
+        upstream += "?" + qs
+
     try:
         r = session.request(
             method=request.method,
             url=upstream,
-            params=request.args,
+            params=request.args if request.method == 'GET' else None,
             data=request.form if request.method == 'POST' else None,
             headers=prepare_headers(),
             allow_redirects=True
         )
-        return process_response((r.content, r.status_code, dict(r.headers)), request.url)
+        return process_response((r.content, r.status_code, dict(r.headers)), upstream)
     except Exception as e:
         abort(500, ERROR_HEADER + str(e))
 
@@ -277,8 +245,6 @@ def prepare_headers():
     }
 
 # ─── IMAGE RE-ENCODE HELPER ─────────────────────────────────────────────────
-
-
 def _reencode_image(data: bytes) -> tuple[bytes,str]:
     buff = io.BytesIO(data)
     img = Image.open(buff)
@@ -294,11 +260,7 @@ def _reencode_image(data: bytes) -> tuple[bytes,str]:
     img.save(out, 'JPEG', progressive=False)
     return out.getvalue(), 'image/jpeg'
 
-
-
-
-
-# ─── OPTIONAL: LIGHT-BLUE BG FOR 68kmla.org ─────────────────────────────────
+# ─── OPTIONAL: LIGHT-BLUE BG VOOR 68kmla.org ─────────────────────────────────
 @app.after_request
 def inject_body_bgcolor(resp: Response):
     ct   = resp.headers.get("Content-Type","")
