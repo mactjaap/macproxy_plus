@@ -659,7 +659,9 @@ def handle_request(req):
 
 # --- end enter block ----
 
-    # ─── 1) attachments → binary + PIL re-encode (preserves colour, flattens transparency)
+
+
+    # ─── 1) attachments → binary + PIL re-encode (with resize/convert)
     if req.method == 'GET' and 'attachments/' in full:
         url = f"https://{DOMAIN}{full}"
         logger.debug("Fetching attachment: %s", url)
@@ -677,23 +679,48 @@ def handle_request(req):
                 logger.debug("PIL opened attachment: format=%s mode=%s size=%s",
                              img.format, img.mode, img.size)
 
-                # flatten alpha onto white if needed
-                if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
-                    logger.debug("Attachment has transparency, compositing on white")
-                    bg = Image.new('RGB', img.size, (255,255,255))
+                # (A) flatten alpha onto white if needed
+                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                    logger.debug("Attachment has transparency; flattening onto white")
+                    bg = Image.new('RGB', img.size, (255, 255, 255))
                     rgba = img.convert('RGBA')
                     bg.paste(rgba, mask=rgba.split()[-1])
                     img = bg
                 else:
                     img = img.convert('RGB')
 
-                buf = io.BytesIO()
-                img.save(buf, 'JPEG', progressive=False)
-                img_bytes = buf.getvalue()
-                out_ct    = 'image/jpeg'
-                logger.debug("Re-encoded attachment to JPEG, new size=%d", len(img_bytes))
+                # (B) resize if requested by config
+                if getattr(config, "RESIZE_IMAGES", False):
+                    orig_w, orig_h = img.size
+                    max_w = getattr(config, "MAX_IMAGE_WIDTH", orig_w)
+                    max_h = getattr(config, "MAX_IMAGE_HEIGHT", orig_h)
+                    scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                    if scale < 1.0:
+                        new_size = (int(orig_w * scale), int(orig_h * scale))
+                        img = img.resize(new_size, Image.LANCZOS)
+                        logger.debug("Resized attachment to %s", new_size)
+
+                # (C) convert to GIF if requested, else JPEG
+                if getattr(config, "CONVERT_IMAGES", False) and \
+                   getattr(config, "CONVERT_IMAGES_TO_FILETYPE", "").lower() == "gif":
+                    buf = io.BytesIO()
+                    algo_name = getattr(config, "DITHERING_ALGORITHM", "FLOYDSTEINBERG").upper()
+                    dither_const = getattr(Image, algo_name, Image.FLOYDSTEINBERG)
+                    img.convert('P', dither=dither_const).save(buf, 'GIF')
+                    img_bytes = buf.getvalue()
+                    out_ct    = 'image/gif'
+                    logger.debug("Converted attachment to GIF, size=%d", len(img_bytes))
+                else:
+                    buf = io.BytesIO()
+                    img.save(buf, 'JPEG', progressive=False)
+                    img_bytes = buf.getvalue()
+                    out_ct    = 'image/jpeg'
+                    logger.debug("Re-encoded attachment to JPEG, size=%d", len(img_bytes))
+
             except Exception as e:
-                logger.debug("PIL failed for attachment, sending raw: %r", e)
+                logger.debug("PIL failed for attachment; sending raw: %r", e)
+                img_bytes = r.content
+                out_ct    = orig_ct
 
         return Response(
             img_bytes,
@@ -707,6 +734,7 @@ def handle_request(req):
             direct_passthrough=True
         )
 
+
     # ─── 2) UNIVERSAL IMAGE CATCH ───────────────────────────────────────────────
     if req.method == 'GET' and re.search(r'\.(?:jpe?g|png|gif|bmp|webp|svg|ico)(?:[?#]|$)', full.lower()):
         url = f"https://{DOMAIN}{full}"
@@ -714,23 +742,53 @@ def handle_request(req):
         r = SESSION.get(url, headers={'User-Agent': req.headers.get('User-Agent','')})
         orig_ct = r.headers.get('Content-Type','').lower()
 
+        img_bytes = r.content
+        out_ct    = orig_ct
+
         try:
-            buf = io.BytesIO(r.content)
-            img = Image.open(buf)
-            # Flatten alpha onto white if needed
+            buf_in = io.BytesIO(r.content)
+            img = Image.open(buf_in)
+            logger.debug("PIL opened image: format=%s mode=%s size=%s", img.format, img.mode, img.size)
+
+            # (A) Flatten alpha onto white if needed
             if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
                 bg = Image.new('RGB', img.size, (255,255,255))
-                bg.paste(img.convert('RGBA'), mask=img.convert('RGBA').split()[-1])
+                rgba = img.convert('RGBA')
+                bg.paste(rgba, mask=rgba.split()[-1])
                 img = bg
             else:
                 img = img.convert('RGB')
 
-            out = io.BytesIO()
-            img.save(out, 'JPEG', progressive=False)
-            img_bytes, out_ct = out.getvalue(), 'image/jpeg'
-            logger.debug("PIL re-encode succeeded: %s → image/jpeg", full)
+            # (B) Resize if requested by config
+            if getattr(config, "RESIZE_IMAGES", False):
+                orig_w, orig_h = img.size
+                max_w = getattr(config, "MAX_IMAGE_WIDTH", orig_w)
+                max_h = getattr(config, "MAX_IMAGE_HEIGHT", orig_h)
+                scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                if scale < 1.0:
+                    new_size = (int(orig_w * scale), int(orig_h * scale))
+                    img = img.resize(new_size, Image.LANCZOS)
+                    logger.debug("Resized image to %s", new_size)
+
+            # (C) Convert to GIF if requested, else JPEG
+            if getattr(config, "CONVERT_IMAGES", False) and \
+               getattr(config, "CONVERT_IMAGES_TO_FILETYPE", "").lower() == "gif":
+                buf_out = io.BytesIO()
+                algo_name = getattr(config, "DITHERING_ALGORITHM", "FLOYDSTEINBERG").upper()
+                dither_const = getattr(Image, algo_name, Image.FLOYDSTEINBERG)
+                img.convert('P', dither=dither_const).save(buf_out, 'GIF')
+                img_bytes = buf_out.getvalue()
+                out_ct    = 'image/gif'
+                logger.debug("Converted image to GIF, size=%d", len(img_bytes))
+            else:
+                buf_out = io.BytesIO()
+                img.save(buf_out, 'JPEG', progressive=False)
+                img_bytes = buf_out.getvalue()
+                out_ct    = 'image/jpeg'
+                logger.debug("Re-encoded image to JPEG, size=%d", len(img_bytes))
+
         except Exception as e:
-            logger.debug("PIL failed (%r), falling back to orig bytes", e)
+            logger.debug("PIL failed (%r), falling back to raw bytes", e)
             img_bytes, out_ct = r.content, orig_ct
 
         return Response(
@@ -744,6 +802,11 @@ def handle_request(req):
             },
             direct_passthrough=True
         )
+
+
+
+
+
 
     # ─── 3) Direct Snitz Archive (static HTML + images under /forums/archive/) ─
     if req.method == 'GET' and path.startswith('forums/archive'):
