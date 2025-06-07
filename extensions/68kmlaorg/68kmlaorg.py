@@ -306,6 +306,13 @@ def strip_to_html2(html: str) -> str:
             a['href'] = new
             logger.debug("Rewrote attachment link %s → %s", old, new)
 
+    # ── ADD spacing around every <img> so old browsers break lines correctly
+    for img in soup.find_all("img"):
+        # insert a <br> immediately before and after each image
+        img.insert_before(soup.new_tag("br"))
+        img.insert_after(soup.new_tag("br"))
+        logger.debug("Wrapped <img> in <br> tags for spacing: %s", img.get("src"))
+
     # Insert <hr> before every <h1>
     for h1 in soup.find_all("h1"):
         h1.insert_before(soup.new_tag("hr"))

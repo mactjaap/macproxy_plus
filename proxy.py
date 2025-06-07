@@ -30,9 +30,9 @@ ERROR_HEADER       = "[[Macproxy Encountered an Error]]"
 override_extension = None
 
 # default user_agent
-# USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus)"
+USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus)"
 # for better working on some sites
-USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
+#USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
 
 # ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
 def clear_image_cache():
