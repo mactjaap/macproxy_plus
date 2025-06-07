@@ -262,6 +262,38 @@ def strip_to_html2(html: str) -> str:
             a['href'] = new
             logger.debug("Rewrote attachment link %s → %s", old, new)
 
+
+    # ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        # skip inline or missing
+        if not src or src.startswith("data:"):
+            continue
+        try:
+            # fetch the real image so we can measure it
+            r = SESSION.get(src)
+            im = Image.open(io.BytesIO(r.content))
+            w, h = im.size
+            # clamp to your maxs, preserve aspect
+            max_w, max_h = 512, 342
+            scale = min(max_w / w, max_h / h, 1)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img["width"]  = str(new_w)
+            img["height"] = str(new_h)
+            logger.debug("Scaled <%s> from %dx%d to %dx%d", src, w, h, new_w, new_h)
+        except Exception as e:
+            logger.debug("Couldn't resize image %s: %r", src, e)
+
+
+    # ── ADD spacing around every <img> so old browsers break lines correctly
+    for img in soup.find_all("img"):
+        # insert a <br> immediately before and after each image
+        img.insert_before(soup.new_tag("br"))
+        img.insert_after(soup.new_tag("br"))
+        logger.debug("Wrapped <img> in <br> tags for spacing: %s", img.get("src"))
+
+
+
     # Voeg <hr> vóór elke <h1>
     for h1 in soup.find_all("h1"):
         h1.insert_before(soup.new_tag("hr"))

@@ -30,7 +30,7 @@ override_extension = None
 
 PROXY_DOMAIN       = "proxy.macip.net"
 UPSTREAM_DOMAIN    = "68kmla.org"
-USER_AGENT         = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
+USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus) - website proxy version"
 
 # ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
 def clear_image_cache():
