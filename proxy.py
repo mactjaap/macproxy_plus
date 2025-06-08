@@ -84,11 +84,64 @@ def handle_matching_extension(module):
     return resp
 
 # ─── MAIN ROUTE ──────────────────────────────────────────────────────────────
-@app.route('/', defaults={'path': ''}, methods=['GET','POST'])
+@app.route('/', defaults={'path': '/'}, methods=['GET','POST'])
 @app.route('/<path:path>', methods=['GET','POST'])
 def handle_request(path):
-    global override_extension
 
+
+
+    # ── CUSTOM ATTACHMENT WARNING PAGE ON PUBLIC PROXY ─────────────────────────
+    host = request.host.split(':', 1)[0]
+    #if host == "proxy.macip.net" and "attachments/" in request.full_path:
+    if host == "proxy.macip.net" and re.search(r'/index\.php\?attachments/', request.full_path):
+        custom_html = """\
+<html>
+  <body>
+    <!-- EINDE MENU -->
+    <a href="/bb/index.php">Home</a> |
+    <a href="/bb/index.php?forums/">Forums</a> |
+    <a href="/bb/index.php?forums/68kmla-wiki.13/">Wiki</a> |
+    <a href="/bb/index.php?whats-new/">What’s new</a> |
+    <a href="/bb/index.php?media/">Media</a> |
+    <a href="/bb/index.php?resources/">Resources</a> |
+    <a href="/bb/index.php?members/">Members</a> |
+    <a href="/forums/archive/">Snitz Archive</a> |
+    <a href="https://www.patreon.com/68kmla">Patreon</a> |
+    <a href="/bb/index.php?search/">Search</a>
+    <br>
+    <form>
+      <label for="menu">Menu:</label>
+      <select id="menu" onchange="window.location.href=this.value;">
+        <option value="/bb/index.php">Home</option>
+        <option value="/bb/index.php?forums/">Forums</option>
+        <option value="/bb/index.php?whats-new/posts/">New posts</option>
+        <option value="/bb/index.php?whats-new/media/">New media</option>
+        <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
+        <option value="/bb/index.php?whats-new/resources/">New resources</option>
+        <option value="/bb/index.php?whats-new/profile-posts/">New profile posts</option>
+        <option value="/bb/index.php?whats-new/latest-activity/">Latest activity</option>
+        <option value="/bb/index.php?media/">Media</option>
+        <option value="/bb/index.php?resources/">Resources</option>
+        <option value="/bb/index.php?resources/latest-reviews">Resources latest reviews</option>
+        <option value="/bb/index.php?members/">Members</option>
+        <option value="/bb/index.php?online/">Current visitors</option>
+        <option value="/forums/archive/">Snitz Archive</option>
+        <option value="https://www.patreon.com/68kmla">Patreon</option>
+        <option value="/bb/index.php?search/">Search</option>
+        <option value="/forums/archive/">Snitz Archive</option>
+        <option value="/bb/index.php?forums/68kmla-wiki.13/">Wiki</option>
+      </select>
+    </form>
+    <hr>
+    <h1>Attachments, logins are not available on this public proxy.</h1>
+    <p>If you need to view attachments, please use the official 68kMLA gateway.</p>
+    <p>This for all actions which need a login.</p>
+  </body>
+</html>"""
+        return Response(custom_html, 200, {'Content-Type': 'text/html'})
+
+    global override_extension
+    
     try:
         # 1) Override‐extension?
         if override_extension:
