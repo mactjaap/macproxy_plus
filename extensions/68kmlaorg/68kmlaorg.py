@@ -9,6 +9,7 @@ from flask import Response, request
 from bs4 import BeautifulSoup, Comment, NavigableString
 from PIL import Image
 import config
+import urllib.parse
 
 # Parse config values (strings "True"/"False") into booleans
 ENABLE_DEBUG  = str(config.ENABLE_DEBUG).lower()  in ("1","true","yes")
@@ -261,6 +262,15 @@ def strip_to_html2(html: str) -> str:
             new = img['src']
             a['href'] = new
             logger.debug("Rewrote attachment link %s → %s", old, new)
+
+
+    # ── REWRITE absolute attachment-image URLs to proxy-relative paths ───────
+    for img in soup.find_all('img', src=re.compile(r'^https?://68kmla\.org(/bb/data/attachments/.*)')):
+        orig = img['src']
+        parsed = urllib.parse.urlparse(orig)
+        # turn “https://68kmla.org/bb/data/...jpg” into “/bb/data/...jpg”
+        img['src'] = parsed.path
+        logger.debug("Rewrote absolute image URL %s → %s", orig, img['src'])
 
 
     # ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
