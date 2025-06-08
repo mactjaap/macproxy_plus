@@ -74,20 +74,23 @@ def get_username():
 def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-    # ── INLINE-EMBED JoyPixels emoji so they always render ─────────────────────
-    import re, base64, requests
+    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path ──────────
+    import os
+    from utils.image_utils import fetch_and_cache_image
 
-    for img in soup.find_all("img", 
-            src=lambda v: v and "cdn.jsdelivr.net/joypixels/assets" in v):
-        url = img["src"]
+    for img in soup.find_all("img", src=lambda v: v and "cdn.jsdelivr.net/joypixels" in v):
+        original = img["src"]
         try:
-            r = requests.get(url, headers={'User-Agent': request.headers.get('User-Agent','')}, timeout=5)
-            if r.status_code == 200 and r.headers.get('Content-Type','').startswith("image/"):
-                b64 = base64.b64encode(r.content).decode("ascii")
-                img["src"] = f"data:{r.headers['Content-Type']};base64,{b64}"
-                logger.debug("Inlined JoyPixels emoji %s → data URI", url)
+            # download & cache returns the local filename (may include dirs)
+            fname = fetch_and_cache_image(original)
+            # only keep the basename to avoid double /cached_image/
+            basename = os.path.basename(fname)
+            img["src"] = f"/cached_image/{basename}"
+            logger.debug("Cached JoyPixels emoji %s → /cached_image/%s", original, basename)
         except Exception as e:
-            logger.warning("Failed to inline emoji %s: %r", url, e)
+            logger.warning("Failed to cache emoji %s: %r", original, e)
+
+
 
     # ── REMOVE: any <title> tags accidentally carried into inner ─────────────
     for t in soup.find_all("title"):
