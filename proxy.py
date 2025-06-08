@@ -108,7 +108,7 @@ def handle_request(path):
     <a href="/forums/archive/">Snitz Archive</a> |
     <a href="https://www.patreon.com/68kmla">Patreon</a> |
     <a href="/bb/index.php?search/">Search</a>
-    <br>
+    <br><br>
     <form>
       <label for="menu">Menu:</label>
       <select id="menu" onchange="window.location.href=this.value;">
