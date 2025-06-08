@@ -74,7 +74,26 @@ def get_username():
 def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path ──────────
+
+    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (black & white GIF) ───
+    #import os
+    #from utils.image_utils import fetch_and_cache_image
+
+    #for img in soup.find_all("img", src=lambda v: v and "cdn.jsdelivr.net/joypixels" in v):
+    #    original = img["src"]
+    #    try:
+    #        # download & cache returns the local filename (may include dirs)
+    #        fname = fetch_and_cache_image(original)
+    #        # only keep the basename to avoid double /cached_image/
+    #        basename = os.path.basename(fname)
+    #        # rewrite to our cached GIF (will be b/w)
+    #        img["src"] = f"/cached_image/{basename}"
+    #        logger.debug("Cached JoyPixels emoji %s → /cached_image/%s (b/w GIF)", original, basename)
+    #    except Exception as e:
+    #        logger.warning("Failed to cache emoji %s: %r", original, e)
+
+
+    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (color GIF) ───
     import os
     from utils.image_utils import fetch_and_cache_image
 
@@ -85,8 +104,9 @@ def strip_to_html2(html: str) -> str:
             fname = fetch_and_cache_image(original)
             # only keep the basename to avoid double /cached_image/
             basename = os.path.basename(fname)
+            # rewrite to our cached GIF (will be color)
             img["src"] = f"/cached_image/{basename}"
-            logger.debug("Cached JoyPixels emoji %s → /cached_image/%s", original, basename)
+            logger.debug("Cached JoyPixels emoji %s → /cached_image/%s (color GIF)", original, basename)
         except Exception as e:
             logger.warning("Failed to cache emoji %s: %r", original, e)
 
