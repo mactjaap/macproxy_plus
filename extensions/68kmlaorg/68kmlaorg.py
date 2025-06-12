@@ -10,6 +10,9 @@ from bs4 import BeautifulSoup, Comment, NavigableString
 from PIL import Image
 import config
 
+# for logout
+import urllib.parse
+
 # Parse config values (strings "True"/"False") into booleans
 ENABLE_DEBUG  = str(config.ENABLE_DEBUG).lower()  in ("1","true","yes")
 ENABLE_IMAGES = str(config.ENABLE_IMAGES).lower() in ("1","true","yes")
@@ -67,6 +70,26 @@ def get_username():
             logger.debug("get_username failed: %r", e)
             USERNAME = None
     return USERNAME
+
+
+# ─── Extract_logout_link──────────────────────────────────────────────
+
+def extract_logout_link(html_content: str) -> str | None:
+    soup_temp = BeautifulSoup(html_content, "html.parser")
+    logout_link_tag = soup_temp.find("a", class_="menu-linkRow", string="Log out")
+    if logout_link_tag and "href" in logout_link_tag.attrs:
+        logout_href = logout_link_tag["href"]
+        unescaped_logout_href = urllib.parse.unquote(logout_href)
+        logger.debug("Extracted logout URL from direct link: %s", unescaped_logout_href)
+        return unescaped_logout_href
+    html_tag = soup_temp.find("html")
+    if html_tag and "data-csrf" in html_tag.attrs:
+        csrf_token = html_tag["data-csrf"]
+        logout_url = f"/bb/index.php?logout/&t={urllib.parse.quote(csrf_token, safe='')}"
+        logger.debug("Constructed logout URL from CSRF: %s", logout_url)
+        return logout_url
+    logger.debug("Logout link not found in HTML")
+    return None
 
 
 # ─── Strip & Rewrite to HTML 2.0 ──────────────────────────────────────────────
@@ -338,7 +361,19 @@ def strip_to_html2(html: str) -> str:
             continue
         try:
             # fetch the real image so we can measure it
-            r = SESSION.get(src)
+            # Ensure the image source is an absolute URL before fetching
+            full_src = src
+            if full_src.startswith('/'): # It's a root-relative URL
+                full_src = f"https://{DOMAIN}{full_src}"
+            elif not full_src.startswith('http'): # It's relative but not root-relative (less common for 68kMLA images)
+                # This might need more sophisticated path resolution, but for now, assume DOMAIN is enough.
+                # If images are like 'images/foo.png' when on '/bb/', you might need to combine with current path.
+                # However, 68kMLA usually uses root-relative or absolute URLs for images.
+                full_src = f"https://{DOMAIN}/{full_src.lstrip('/')}" # Ensure no double slashes
+
+            # fetch the real image so we can measure it
+            r = SESSION.get(full_src)
+
             im = Image.open(io.BytesIO(r.content))
             w, h = im.size
             # clamp to your maxs, preserve aspect
@@ -458,75 +493,61 @@ def clean_empty_lines(s: str) -> str:
 
 
 # ─── Wrap into minimal HTML 2.0 skeleton ────────────────────────────────────
-def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> str:
-    """
-    inner: Stripped-down HTML 2.0 (string)
-    title: Page <title>
-    debug: Optional debug banner HTML
-    user_id: The string from <span data-user-id="…"> (or None)
-    """
-    dbg = f"<p style='color:red'>{debug}</p>" if ENABLE_DEBUG and debug else ""
 
-    # Show first 200 chars of inner in the log to verify where <span data-user-id> might have gone
+def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> str:
+    # ─── Detect logout request and clear our session cache ────────────────
+    global USERNAME, SESSION
+    # if the incoming request URL was ...index.php?logout/&t=...
+    #if request.path.endswith('index.php') and 'logout' in request.args:
+    if request.full_path.startswith('/bb/index.php?logout'):
+        logger.debug("Detected logout request → clearing SESSION.cookies and USERNAME")
+        SESSION.cookies.clear()
+        USERNAME = None
+
+    dbg = f"<p style='color:red'>{debug}</p>" if ENABLE_DEBUG and debug else ""
     snippet = inner[:200].replace("\n", " ").replace("\r", " ")
     logger.debug("wrap_html2: inner snippet (first 200 chars): %r", snippet)
-
     if user_id:
         logger.debug("wrap_html2: Received user_id -> %r", user_id)
     else:
         logger.debug("wrap_html2: user_id was None")
 
     user = get_username()
+    logout_url = extract_logout_link(inner)
+    logger.debug("wrap_html2: logout_url -> %r", logout_url)
 
     if user:
-        # Insert the username and the dropdown, including the (ID: …) label
         lg = f"""
-        <hr>
-        <!-- Debug: user_id was: {user_id} -->
-        <form>
-            <label for="menu">Personal menu:</label>
-            <select id="menu" onchange="window.location.href=this.value;">
-                <option value="/bb/index.php">{user}</option>
-                <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
-                <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
-                <option value="/bb/index.php?account/account-details">Account details</option>
-                <option value="">------------</option>
-                <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
-                <option value="/bb/index.php?whats-new/media/">New media</option>
-                <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
-                <option value="/bb/index.php?whats-new/resources/">New resources</option>
-                <option value="/bb/index.php?whats-new/profile-posts/">New profile posts</option>
-                <option value="/bb/index.php?whats-new/latest-activity/">Latest activity</option>
-                <option value="/bb/index.php?media/">Media</option>
-                <option value="/bb/index.php?resources/">Resources</option>
-                <option value="/bb/index.php?resources/latest-reviews">Resources latest reviews</option>
-                <option value="/bb/index.php?members/">Members</option>
-                <option value="/bb/index.php?online/">Current visitors</option>
-                <option value="/bb/index.php?account/">Account</option>
-                <option value="/bb/index.php?conversations/">Conversations</option>
-                <option value="/bb/index.php?conversations/add">Start conversation</option>
-                <option value="/bb/index.php?account/alerts">Alerts</option>
-                <option value="/bb/index.php?account/preferences">Preferences</option>
-                <option value="/bb/index.php?search/">Search</option>
-            </select>
-        </form>
-        <br>
-        """
+<hr>
+<form>
+    <label for="menu">Personal menu:</label>
+    <select id="menu" onchange="window.location.href=this.value;">
+        <option value="/bb/index.php">{user}</option>
+        <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
+        <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
+        <option value="/bb/index.php?account/account-details">Account details</option>
+        <option value="/bb/index.php?account/security">Password and security</option>
+        <option value="/bb/index.php?account/privacy">Privacy</option>
+        <option value="/bb/index.php?account/preferences">Preferences</option>
+        <option value="">------------</option>
+        {f'<option value="{logout_url}">Log out</option>' if logout_url else ''}
+    </select>
+</form>
+<br>
+"""
     else:
         lg = ""
 
     nav = "\n"
     ftr = "<hr>\n"
-
     html = (
         "<html><head>\n"
-        f"  <title>{title}</title>\n"
+        f"   <title>{title}</title>\n"
         "</head>\n"
         "<body TEMP_BODY>\n"
         f"{dbg}{lg}{nav}{inner}{ftr}"
         "</body></html>\n"
     )
-    # Replace first <body…> with custom bgcolor
     html = re.sub(r"<body[^>]*>", '<body bgcolor="lightblue">', html, count=1)
     return clean_empty_lines(html)
 
