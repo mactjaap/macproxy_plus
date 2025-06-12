@@ -353,38 +353,41 @@ def strip_to_html2(html: str) -> str:
             logger.debug("Rewrote attachment link %s → %s", old, new)
 
 
+# ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
+
     # ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
+    from PIL import Image, UnidentifiedImageError
+    import io
+
     for img in soup.find_all("img"):
         src = img.get("src")
-        # skip inline or missing
         if not src or src.startswith("data:"):
             continue
+        clean_src = src.split('?', 1)[0]
+        if clean_src.startswith('/'):
+            full_src = f"https://{DOMAIN}{clean_src}"
+        elif clean_src.startswith('http'):
+            full_src = clean_src
+        else:
+            full_src = f"https://{DOMAIN}/{clean_src.lstrip('/')}"
         try:
-            # fetch the real image so we can measure it
-            # Ensure the image source is an absolute URL before fetching
-            full_src = src
-            if full_src.startswith('/'): # It's a root-relative URL
-                full_src = f"https://{DOMAIN}{full_src}"
-            elif not full_src.startswith('http'): # It's relative but not root-relative (less common for 68kMLA images)
-                # This might need more sophisticated path resolution, but for now, assume DOMAIN is enough.
-                # If images are like 'images/foo.png' when on '/bb/', you might need to combine with current path.
-                # However, 68kMLA usually uses root-relative or absolute URLs for images.
-                full_src = f"https://{DOMAIN}/{full_src.lstrip('/')}" # Ensure no double slashes
-
-            # fetch the real image so we can measure it
-            r = SESSION.get(full_src)
-
+            r = SESSION.get(full_src, headers={'User-Agent': request.headers.get('User-Agent','')})
             im = Image.open(io.BytesIO(r.content))
             w, h = im.size
-            # clamp to your maxs, preserve aspect
             max_w, max_h = 512, 342
             scale = min(max_w / w, max_h / h, 1)
             new_w, new_h = int(w * scale), int(h * scale)
-            img["width"]  = str(new_w)
-            img["height"] = str(new_h)
+            img["width"], img["height"] = str(new_w), str(new_h)
             logger.debug("Scaled <%s> from %dx%d to %dx%d", src, w, h, new_w, new_h)
+        except UnidentifiedImageError:
+            logger.debug("Skipping resize for %r (unidentified image)", src)
         except Exception as e:
-            logger.debug("Couldn't resize image %s: %r", src, e)
+            logger.debug("Couldn't fetch or process image %r: %s", src, e)
+
+
+
+# ────────────────────────────────────────────────────────────────────────────
+
 
 
     # ── ADD spacing around every <img> so old browsers break lines correctly
@@ -483,9 +486,8 @@ def strip_to_html2(html: str) -> str:
             logger.debug("Removed <br> after cached emoji: %s", img.get("src"))
     # --- END ADDITION ---
 
-
+    # after all your <img> tweaks etc., return the cleaned HTML
     return str(soup)
-
 
 # ─── Remove empty lines helper ───────────────────────────────────────────────
 def clean_empty_lines(s: str) -> str:
