@@ -96,10 +96,27 @@ def extract_logout_link(html_content: str) -> str | None:
 def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
-# ── ADD SNIPPETS HERE AFTER ───────────────────────────────────────
+# ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
+
+
+    # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
+    for h2 in soup.find_all('h2'):
+        # look for the specific link inside the <h2>
+        a = h2.find(
+            'a',
+            href=re.compile(r'^/bb/index\.php#important-information\.\d+')
+        )
+        if a:
+            text = a.get_text(strip=True)
+            # replace the entire <h2>…</h2> with plain text plus colon
+            h2.replace_with(f"{text}:")
+            logger.debug(
+                "Flattened Important Information header to %r",
+                f"{text}:"
+            )
+
 
     # ── BOLD “threads” LINKS ────────────────────────────────────────────────
-    import re
     for a in soup.find_all('a', href=re.compile(r'/bb/index\.php\?threads')):
         # Capture whatever is already inside the <a>
         inner_html = ''.join(str(c) for c in a.contents)
@@ -1025,7 +1042,22 @@ def handle_request(req):
     if req.method == 'GET' and 'index.php' in path:
         url = f"https://{DOMAIN}/{path}" + (f'?{qs}' if qs else '')
         logger.debug("Fetching other page: %s", url)
-        r = SESSION.get(url, headers={'User-Agent': req.headers.get('User-Agent','')})
+        try:
+            r = SESSION.get(
+                url,
+                headers={'User-Agent': request.headers.get('User-Agent','')}
+            )
+        except requests.exceptions.RequestException as e:
+            logger.warning("Upstream fetch failed for %s: %s", url, e)
+            error_html = (
+                "<h1>Page Unavailable</h1>"
+                "<p>Sorry, that page is temporarily unreachable.</p>"
+                "Read about the wiki in the Wiki forum:<br>"
+                "<a href=\"https://68kmla.org/bb/index.php?forums/68kmla-wiki.13/\">WIKI forum</a>"
+            )
+            return wrap_html2(error_html, "Unavailable", debug, None), 503
+
+        # ─── Success path ───────────────────────────────────────────────────
         if ENABLE_DEBUG:
             debug += (
                 "<b>68kMLA Response:</b><br>"
@@ -1034,14 +1066,13 @@ def handle_request(req):
 
         orig_soup = BeautifulSoup(r.text, "html.parser")
         span = orig_soup.find("span", attrs={"data-user-id": True})
-        if span:
-            user_id = span["data-user-id"]
-        else:
-            user_id = None
+        user_id = span["data-user-id"] if span else None
 
         inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
+        title = (orig_soup.title or BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
         return wrap_html2(inner, title, debug, user_id), 200
+
+
 
     # ─── 11) Handle add-reply POSTs ───────────────────────────────────────────
     if req.method == 'POST' and 'add-reply' in full:
