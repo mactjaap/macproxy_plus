@@ -96,6 +96,7 @@ def extract_logout_link(html_content: str) -> str | None:
 def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
+# ── ADD SNIPPETS HERE AFTER ───────────────────────────────────────
 
     # ── BOLD “threads” LINKS ────────────────────────────────────────────────
     import re
