@@ -75,6 +75,39 @@ def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
 
+    # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
+
+
+    # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
+    for h2 in soup.find_all('h2'):
+        # look for the specific link inside the <h2>
+        a = h2.find(
+            'a',
+            href=re.compile(r'^/bb/index\.php#important-information\.\d+')
+        )
+        if a:
+            text = a.get_text(strip=True)
+            # replace the entire <h2>…</h2> with plain text plus colon
+            h2.replace_with(f"{text}:")
+            logger.debug(
+                "Flattened Important Information header to %r",
+                f"{text}:"
+            )
+
+
+    # ── BOLD “threads” LINKS ────────────────────────────────────────────────
+    for a in soup.find_all('a', href=re.compile(r'/bb/index\.php\?threads')):
+        # Capture whatever is already inside the <a>
+        inner_html = ''.join(str(c) for c in a.contents)
+        a.clear()  # remove the old contents
+        # Create <b> and put the old contents back inside it
+        b = soup.new_tag('b')
+        b.append(BeautifulSoup(inner_html, 'html.parser'))
+        a.append(b)
+        logger.debug("Bolded thread link: %s", a['href'])
+
+
+
     # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (black & white GIF) ───
     #import os
     #from utils.image_utils import fetch_and_cache_image
@@ -93,6 +126,8 @@ def strip_to_html2(html: str) -> str:
     #        logger.warning("Failed to cache emoji %s: %r", original, e)
 
 
+# extensions/68kmlaorg/68kmlaorg.py
+
     # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (color GIF) ───
     import os
     from utils.image_utils import fetch_and_cache_image
@@ -106,10 +141,14 @@ def strip_to_html2(html: str) -> str:
             basename = os.path.basename(fname)
             # rewrite to our cached GIF (will be color)
             img["src"] = f"/cached_image/{basename}"
+            # --- START ADDITION ---
+            # Set explicit width and height for a normal emoji size
+            img["width"] = "20"
+            img["height"] = "20"
+            # --- END ADDITION ---
             logger.debug("Cached JoyPixels emoji %s → /cached_image/%s (color GIF)", original, basename)
         except Exception as e:
             logger.warning("Failed to cache emoji %s: %r", original, e)
-
 
 
     # ── REMOVE: any <title> tags accidentally carried into inner ─────────────
@@ -414,6 +453,24 @@ def strip_to_html2(html: str) -> str:
     if body and "data-template" in body.attrs:
         logger.debug("Removing data-template attribute from <body>")
         del body["data-template"]
+
+
+
+    # --- START ADDITION: Remove <br> tags around cached emoji images ---
+    # Find all <img> tags that are identified as cached emoji (src contains /cached_image/)
+    for img in soup.find_all("img", src=lambda v: v and "/cached_image/" in v):
+        # Check if the previous sibling is a <br> tag and remove it
+        prev_sibling = img.previous_sibling
+        if prev_sibling and prev_sibling.name == "br":
+            prev_sibling.decompose()
+            logger.debug("Removed <br> before cached emoji: %s", img.get("src"))
+        
+        # Check if the next sibling is a <br> tag and remove it
+        next_sibling = img.next_sibling
+        if next_sibling and next_sibling.name == "br":
+            next_sibling.decompose()
+            logger.debug("Removed <br> after cached emoji: %s", img.get("src"))
+    # --- END ADDITION ---
 
     return str(soup)
 
