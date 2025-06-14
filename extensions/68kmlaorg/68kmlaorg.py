@@ -10,6 +10,9 @@ from bs4 import BeautifulSoup, Comment, NavigableString
 from PIL import Image
 import config
 
+# for logout
+import urllib.parse
+
 # Parse config values (strings "True"/"False") into booleans
 ENABLE_DEBUG  = str(config.ENABLE_DEBUG).lower()  in ("1","true","yes")
 ENABLE_IMAGES = str(config.ENABLE_IMAGES).lower() in ("1","true","yes")
@@ -69,9 +72,84 @@ def get_username():
     return USERNAME
 
 
+# ─── Extract_logout_link──────────────────────────────────────────────
+
+def extract_logout_link(html_content: str) -> str | None:
+    soup_temp = BeautifulSoup(html_content, "html.parser")
+    logout_link_tag = soup_temp.find("a", class_="menu-linkRow", string="Log out")
+    if logout_link_tag and "href" in logout_link_tag.attrs:
+        logout_href = logout_link_tag["href"]
+        unescaped_logout_href = urllib.parse.unquote(logout_href)
+        logger.debug("Extracted logout URL from direct link: %s", unescaped_logout_href)
+        return unescaped_logout_href
+    html_tag = soup_temp.find("html")
+    if html_tag and "data-csrf" in html_tag.attrs:
+        csrf_token = html_tag["data-csrf"]
+        logout_url = f"/bb/index.php?logout/&t={urllib.parse.quote(csrf_token, safe='')}"
+        logger.debug("Constructed logout URL from CSRF: %s", logout_url)
+        return logout_url
+    logger.debug("Logout link not found in HTML")
+    return None
+
+
 # ─── Strip & Rewrite to HTML 2.0 ──────────────────────────────────────────────
 def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
+
+# ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
+
+
+    # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
+    for h2 in soup.find_all('h2'):
+        # look for the specific link inside the <h2>
+        a = h2.find(
+            'a',
+            href=re.compile(r'^/bb/index\.php#important-information\.\d+')
+        )
+        if a:
+            text = a.get_text(strip=True)
+            # replace the entire <h2>…</h2> with plain text plus colon
+            h2.replace_with(f"{text}:")
+            logger.debug(
+                "Flattened Important Information header to %r",
+                f"{text}:"
+            )
+
+
+    # ── BOLD “threads” LINKS ────────────────────────────────────────────────
+    for a in soup.find_all('a', href=re.compile(r'/bb/index\.php\?threads')):
+        # Capture whatever is already inside the <a>
+        inner_html = ''.join(str(c) for c in a.contents)
+        a.clear()  # remove the old contents
+        # Create <b> and put the old contents back inside it
+        b = soup.new_tag('b')
+        b.append(BeautifulSoup(inner_html, 'html.parser'))
+        a.append(b)
+        logger.debug("Bolded thread link: %s", a['href'])
+
+
+
+    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (color GIF) ───
+    import os
+    from utils.image_utils import fetch_and_cache_image
+
+    for img in soup.find_all("img", src=lambda v: v and "cdn.jsdelivr.net/joypixels" in v):
+        original = img["src"]
+        try:
+            # download & cache returns the local filename (may include dirs)
+            fname = fetch_and_cache_image(original)
+            # only keep the basename to avoid double /cached_image/
+            basename = os.path.basename(fname)
+            # rewrite to our cached GIF (will be color)
+            img["src"] = f"/cached_image/{basename}"
+            # --- START ADDITION ---
+            # Set explicit width and height for a normal emoji size
+            img["width"] = "20"
+            img["height"] = "20"
+            # --- END ADDITION ---
+            logger.debug("Cached JoyPixels emoji %s → /cached_image/%s (color GIF)", original, basename)
+        except Exception as e:
+            logger.warning("Failed to cache emoji %s: %r", original, e)
 
     # ── REMOVE: any <title> tags accidentally carried into inner ─────────────
     for t in soup.find_all("title"):
@@ -306,6 +384,51 @@ def strip_to_html2(html: str) -> str:
             a['href'] = new
             logger.debug("Rewrote attachment link %s → %s", old, new)
 
+
+# ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
+
+    # ── ADJUST <img> TAG DIMENSIONS FOR OLD BROWSERS ───────────────────────────
+    from PIL import Image, UnidentifiedImageError
+    import io
+
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if not src or src.startswith("data:"):
+            continue
+        clean_src = src.split('?', 1)[0]
+        if clean_src.startswith('/'):
+            full_src = f"https://{DOMAIN}{clean_src}"
+        elif clean_src.startswith('http'):
+            full_src = clean_src
+        else:
+            full_src = f"https://{DOMAIN}/{clean_src.lstrip('/')}"
+        try:
+            r = SESSION.get(full_src, headers={'User-Agent': request.headers.get('User-Agent','')})
+            im = Image.open(io.BytesIO(r.content))
+            w, h = im.size
+            max_w, max_h = 512, 342
+            scale = min(max_w / w, max_h / h, 1)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img["width"], img["height"] = str(new_w), str(new_h)
+            logger.debug("Scaled <%s> from %dx%d to %dx%d", src, w, h, new_w, new_h)
+        except UnidentifiedImageError:
+            logger.debug("Skipping resize for %r (unidentified image)", src)
+        except Exception as e:
+            logger.debug("Couldn't fetch or process image %r: %s", src, e)
+
+
+
+# ────────────────────────────────────────────────────────────────────────────
+
+
+
+    # ── ADD spacing around every <img> so old browsers break lines correctly
+    for img in soup.find_all("img"):
+        # insert a <br> immediately before and after each image
+        img.insert_before(soup.new_tag("br"))
+        img.insert_after(soup.new_tag("br"))
+        logger.debug("Wrapped <img> in <br> tags for spacing: %s", img.get("src"))
+
     # Insert <hr> before every <h1>
     for h1 in soup.find_all("h1"):
         h1.insert_before(soup.new_tag("hr"))
@@ -379,8 +502,24 @@ def strip_to_html2(html: str) -> str:
         logger.debug("Removing data-template attribute from <body>")
         del body["data-template"]
 
-    return str(soup)
+    # --- START ADDITION: Remove <br> tags around cached emoji images ---
+    # Find all <img> tags that are identified as cached emoji (src contains /cached_image/)
+    for img in soup.find_all("img", src=lambda v: v and "/cached_image/" in v):
+        # Check if the previous sibling is a <br> tag and remove it
+        prev_sibling = img.previous_sibling
+        if prev_sibling and prev_sibling.name == "br":
+            prev_sibling.decompose()
+            logger.debug("Removed <br> before cached emoji: %s", img.get("src"))
+        
+        # Check if the next sibling is a <br> tag and remove it
+        next_sibling = img.next_sibling
+        if next_sibling and next_sibling.name == "br":
+            next_sibling.decompose()
+            logger.debug("Removed <br> after cached emoji: %s", img.get("src"))
+    # --- END ADDITION ---
 
+    # after all your <img> tweaks etc., return the cleaned HTML
+    return str(soup)
 
 # ─── Remove empty lines helper ───────────────────────────────────────────────
 def clean_empty_lines(s: str) -> str:
@@ -388,75 +527,61 @@ def clean_empty_lines(s: str) -> str:
 
 
 # ─── Wrap into minimal HTML 2.0 skeleton ────────────────────────────────────
-def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> str:
-    """
-    inner: Stripped-down HTML 2.0 (string)
-    title: Page <title>
-    debug: Optional debug banner HTML
-    user_id: The string from <span data-user-id="…"> (or None)
-    """
-    dbg = f"<p style='color:red'>{debug}</p>" if ENABLE_DEBUG and debug else ""
 
-    # Show first 200 chars of inner in the log to verify where <span data-user-id> might have gone
+def wrap_html2(inner: str, title: str, debug: str = "", user_id: str = None) -> str:
+    # ─── Detect logout request and clear our session cache ────────────────
+    global USERNAME, SESSION
+    # if the incoming request URL was ...index.php?logout/&t=...
+    #if request.path.endswith('index.php') and 'logout' in request.args:
+    if request.full_path.startswith('/bb/index.php?logout'):
+        logger.debug("Detected logout request → clearing SESSION.cookies and USERNAME")
+        SESSION.cookies.clear()
+        USERNAME = None
+
+    dbg = f"<p style='color:red'>{debug}</p>" if ENABLE_DEBUG and debug else ""
     snippet = inner[:200].replace("\n", " ").replace("\r", " ")
     logger.debug("wrap_html2: inner snippet (first 200 chars): %r", snippet)
-
     if user_id:
         logger.debug("wrap_html2: Received user_id -> %r", user_id)
     else:
         logger.debug("wrap_html2: user_id was None")
 
     user = get_username()
+    logout_url = extract_logout_link(inner)
+    logger.debug("wrap_html2: logout_url -> %r", logout_url)
 
     if user:
-        # Insert the username and the dropdown, including the (ID: …) label
         lg = f"""
-        <hr>
-        <!-- Debug: user_id was: {user_id} -->
-        <form>
-            <label for="menu">Personal menu:</label>
-            <select id="menu" onchange="window.location.href=this.value;">
-                <option value="/bb/index.php">{user}</option>
-                <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
-                <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
-                <option value="/bb/index.php?account/account-details">Account details</option>
-                <option value="">------------</option>
-                <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
-                <option value="/bb/index.php?whats-new/media/">New media</option>
-                <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
-                <option value="/bb/index.php?whats-new/resources/">New resources</option>
-                <option value="/bb/index.php?whats-new/profile-posts/">New profile posts</option>
-                <option value="/bb/index.php?whats-new/latest-activity/">Latest activity</option>
-                <option value="/bb/index.php?media/">Media</option>
-                <option value="/bb/index.php?resources/">Resources</option>
-                <option value="/bb/index.php?resources/latest-reviews">Resources latest reviews</option>
-                <option value="/bb/index.php?members/">Members</option>
-                <option value="/bb/index.php?online/">Current visitors</option>
-                <option value="/bb/index.php?account/">Account</option>
-                <option value="/bb/index.php?conversations/">Conversations</option>
-                <option value="/bb/index.php?conversations/add">Start conversation</option>
-                <option value="/bb/index.php?account/alerts">Alerts</option>
-                <option value="/bb/index.php?account/preferences">Preferences</option>
-                <option value="/bb/index.php?search/">Search</option>
-            </select>
-        </form>
-        <br>
-        """
+<hr>
+<form>
+    <label for="menu">Personal menu:</label>
+    <select id="menu" onchange="window.location.href=this.value;">
+        <option value="/bb/index.php">{user}</option>
+        <option value="/bb/index.php?whats-new/news-feed/">News feed</option>
+        <option value="/bb/index.php?search/member&user_id={user_id}">Your content</option>
+        <option value="/bb/index.php?account/account-details">Account details</option>
+        <option value="/bb/index.php?account/security">Password and security</option>
+        <option value="/bb/index.php?account/privacy">Privacy</option>
+        <option value="/bb/index.php?account/preferences">Preferences</option>
+        <option value="">------------</option>
+        {f'<option value="{logout_url}">Log out</option>' if logout_url else ''}
+    </select>
+</form>
+<br>
+"""
     else:
         lg = ""
 
     nav = "\n"
     ftr = "<hr>\n"
-
     html = (
         "<html><head>\n"
-        f"  <title>{title}</title>\n"
+        f"   <title>{title}</title>\n"
         "</head>\n"
         "<body TEMP_BODY>\n"
         f"{dbg}{lg}{nav}{inner}{ftr}"
         "</body></html>\n"
     )
-    # Replace first <body…> with custom bgcolor
     html = re.sub(r"<body[^>]*>", '<body bgcolor="lightblue">', html, count=1)
     return clean_empty_lines(html)
 
@@ -593,8 +718,8 @@ def _do_login(req, debug: str):
 
 # ─── Main Entry Point ────────────────────────────────────────────────────────
 def handle_request(req):
-    full = req.full_path            # e.g. "/forums/archive/mainforums.jpg"
-    path = req.path.lstrip('/')     # e.g. "forums/archive/mainforums.jpg"
+    full = req.full_path            # e.g. "/bb/proxy.php?image=…"
+    path = req.path.lstrip('/')     # e.g. "bb/proxy.php"
     qs   = req.query_string.decode('utf-8')
     debug = ""
     if ENABLE_DEBUG:
@@ -606,7 +731,62 @@ def handle_request(req):
         )
     logger.debug("Handling %s %s", req.method, req.full_path)
 
-    # ─── 1) attachments → binary + PIL re-encode (preserves colour, flattens transparency)
+    # ── BYPASS + CONVERT XenForo proxy.php IMAGE URLs ────────────────────────
+    # If this is a GET to “proxy.php?image=…”, treat it as a raw image:
+    if req.method == 'GET' and path.endswith('proxy.php') and 'image=' in qs:
+        url = f"https://{DOMAIN}/{path}?{qs}"
+        logger.debug("Fetching XenForo proxy.php image: %s", url)
+        r = SESSION.get(url)
+        orig_ct = r.headers.get('Content-Type', '').lower()
+        logger.debug("Upstream proxy.php returned %d bytes @ %s", len(r.content), orig_ct)
+
+        img_bytes = r.content
+        out_ct    = orig_ct
+
+        # Always try to re-encode (flatten PNG→JPEG, etc.)
+        if r.status_code == 200 and orig_ct.startswith('image/'):
+            try:
+                img = Image.open(io.BytesIO(r.content))
+                logger.debug("PIL opened proxied image: format=%s mode=%s size=%s",
+                             img.format, img.mode, img.size)
+
+                # If it has transparency, paste onto white
+                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                    logger.debug("Proxied image has transparency; flattening onto white")
+                    bg = Image.new('RGB', img.size, (255, 255, 255))
+                    rgba = img.convert('RGBA')
+                    bg.paste(rgba, mask=rgba.split()[-1])
+                    img = bg
+                else:
+                    img = img.convert('RGB')
+
+                buf = io.BytesIO()
+                img.save(buf, 'JPEG', progressive=False)
+                img_bytes = buf.getvalue()
+                out_ct    = 'image/jpeg'
+                logger.debug("Re‐encoded proxied image to JPEG, size=%d", len(img_bytes))
+            except Exception as e:
+                logger.debug("PIL failed for proxied image; returning raw bytes: %r", e)
+
+        return Response(
+            img_bytes,
+            status=200,
+            headers={
+                'Content-Type':   out_ct,
+                'Cache-Control':  'no-cache, no-store, must-revalidate',
+                'Pragma':         'no-cache',
+                'Expires':        '0',
+            },
+            direct_passthrough=True
+        )
+
+    # …rest of your existing handle_request(…) code continues here…
+
+# --- end enter block ----
+
+
+
+    # ─── 1) attachments → binary + PIL re-encode (with resize/convert)
     if req.method == 'GET' and 'attachments/' in full:
         url = f"https://{DOMAIN}{full}"
         logger.debug("Fetching attachment: %s", url)
@@ -624,23 +804,48 @@ def handle_request(req):
                 logger.debug("PIL opened attachment: format=%s mode=%s size=%s",
                              img.format, img.mode, img.size)
 
-                # flatten alpha onto white if needed
-                if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
-                    logger.debug("Attachment has transparency, compositing on white")
-                    bg = Image.new('RGB', img.size, (255,255,255))
+                # (A) flatten alpha onto white if needed
+                if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                    logger.debug("Attachment has transparency; flattening onto white")
+                    bg = Image.new('RGB', img.size, (255, 255, 255))
                     rgba = img.convert('RGBA')
                     bg.paste(rgba, mask=rgba.split()[-1])
                     img = bg
                 else:
                     img = img.convert('RGB')
 
-                buf = io.BytesIO()
-                img.save(buf, 'JPEG', progressive=False)
-                img_bytes = buf.getvalue()
-                out_ct    = 'image/jpeg'
-                logger.debug("Re-encoded attachment to JPEG, new size=%d", len(img_bytes))
+                # (B) resize if requested by config
+                if getattr(config, "RESIZE_IMAGES", False):
+                    orig_w, orig_h = img.size
+                    max_w = getattr(config, "MAX_IMAGE_WIDTH", orig_w)
+                    max_h = getattr(config, "MAX_IMAGE_HEIGHT", orig_h)
+                    scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                    if scale < 1.0:
+                        new_size = (int(orig_w * scale), int(orig_h * scale))
+                        img = img.resize(new_size, Image.LANCZOS)
+                        logger.debug("Resized attachment to %s", new_size)
+
+                # (C) convert to GIF if requested, else JPEG
+                if getattr(config, "CONVERT_IMAGES", False) and \
+                   getattr(config, "CONVERT_IMAGES_TO_FILETYPE", "").lower() == "gif":
+                    buf = io.BytesIO()
+                    algo_name = getattr(config, "DITHERING_ALGORITHM", "FLOYDSTEINBERG").upper()
+                    dither_const = getattr(Image, algo_name, Image.FLOYDSTEINBERG)
+                    img.convert('P', dither=dither_const).save(buf, 'GIF')
+                    img_bytes = buf.getvalue()
+                    out_ct    = 'image/gif'
+                    logger.debug("Converted attachment to GIF, size=%d", len(img_bytes))
+                else:
+                    buf = io.BytesIO()
+                    img.save(buf, 'JPEG', progressive=False)
+                    img_bytes = buf.getvalue()
+                    out_ct    = 'image/jpeg'
+                    logger.debug("Re-encoded attachment to JPEG, size=%d", len(img_bytes))
+
             except Exception as e:
-                logger.debug("PIL failed for attachment, sending raw: %r", e)
+                logger.debug("PIL failed for attachment; sending raw: %r", e)
+                img_bytes = r.content
+                out_ct    = orig_ct
 
         return Response(
             img_bytes,
@@ -654,6 +859,7 @@ def handle_request(req):
             direct_passthrough=True
         )
 
+
     # ─── 2) UNIVERSAL IMAGE CATCH ───────────────────────────────────────────────
     if req.method == 'GET' and re.search(r'\.(?:jpe?g|png|gif|bmp|webp|svg|ico)(?:[?#]|$)', full.lower()):
         url = f"https://{DOMAIN}{full}"
@@ -661,23 +867,53 @@ def handle_request(req):
         r = SESSION.get(url, headers={'User-Agent': req.headers.get('User-Agent','')})
         orig_ct = r.headers.get('Content-Type','').lower()
 
+        img_bytes = r.content
+        out_ct    = orig_ct
+
         try:
-            buf = io.BytesIO(r.content)
-            img = Image.open(buf)
-            # Flatten alpha onto white if needed
+            buf_in = io.BytesIO(r.content)
+            img = Image.open(buf_in)
+            logger.debug("PIL opened image: format=%s mode=%s size=%s", img.format, img.mode, img.size)
+
+            # (A) Flatten alpha onto white if needed
             if img.mode in ('RGBA','LA') or (img.mode == 'P' and 'transparency' in img.info):
                 bg = Image.new('RGB', img.size, (255,255,255))
-                bg.paste(img.convert('RGBA'), mask=img.convert('RGBA').split()[-1])
+                rgba = img.convert('RGBA')
+                bg.paste(rgba, mask=rgba.split()[-1])
                 img = bg
             else:
                 img = img.convert('RGB')
 
-            out = io.BytesIO()
-            img.save(out, 'JPEG', progressive=False)
-            img_bytes, out_ct = out.getvalue(), 'image/jpeg'
-            logger.debug("PIL re-encode succeeded: %s → image/jpeg", full)
+            # (B) Resize if requested by config
+            if getattr(config, "RESIZE_IMAGES", False):
+                orig_w, orig_h = img.size
+                max_w = getattr(config, "MAX_IMAGE_WIDTH", orig_w)
+                max_h = getattr(config, "MAX_IMAGE_HEIGHT", orig_h)
+                scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                if scale < 1.0:
+                    new_size = (int(orig_w * scale), int(orig_h * scale))
+                    img = img.resize(new_size, Image.LANCZOS)
+                    logger.debug("Resized image to %s", new_size)
+
+            # (C) Convert to GIF if requested, else JPEG
+            if getattr(config, "CONVERT_IMAGES", False) and \
+               getattr(config, "CONVERT_IMAGES_TO_FILETYPE", "").lower() == "gif":
+                buf_out = io.BytesIO()
+                algo_name = getattr(config, "DITHERING_ALGORITHM", "FLOYDSTEINBERG").upper()
+                dither_const = getattr(Image, algo_name, Image.FLOYDSTEINBERG)
+                img.convert('P', dither=dither_const).save(buf_out, 'GIF')
+                img_bytes = buf_out.getvalue()
+                out_ct    = 'image/gif'
+                logger.debug("Converted image to GIF, size=%d", len(img_bytes))
+            else:
+                buf_out = io.BytesIO()
+                img.save(buf_out, 'JPEG', progressive=False)
+                img_bytes = buf_out.getvalue()
+                out_ct    = 'image/jpeg'
+                logger.debug("Re-encoded image to JPEG, size=%d", len(img_bytes))
+
         except Exception as e:
-            logger.debug("PIL failed (%r), falling back to orig bytes", e)
+            logger.debug("PIL failed (%r), falling back to raw bytes", e)
             img_bytes, out_ct = r.content, orig_ct
 
         return Response(
@@ -691,6 +927,11 @@ def handle_request(req):
             },
             direct_passthrough=True
         )
+
+
+
+
+
 
     # ─── 3) Direct Snitz Archive (static HTML + images under /forums/archive/) ─
     if req.method == 'GET' and path.startswith('forums/archive'):
@@ -801,7 +1042,22 @@ def handle_request(req):
     if req.method == 'GET' and 'index.php' in path:
         url = f"https://{DOMAIN}/{path}" + (f'?{qs}' if qs else '')
         logger.debug("Fetching other page: %s", url)
-        r = SESSION.get(url, headers={'User-Agent': req.headers.get('User-Agent','')})
+        try:
+            r = SESSION.get(
+                url,
+                headers={'User-Agent': request.headers.get('User-Agent','')}
+            )
+        except requests.exceptions.RequestException as e:
+            logger.warning("Upstream fetch failed for %s: %s", url, e)
+            error_html = (
+                "<h1>Page Unavailable</h1>"
+                "<p>Sorry, that page is temporarily unreachable.</p>"
+                "Read about the wiki in the Wiki forum:<br>"
+                "<a href=\"https://68kmla.org/bb/index.php?forums/68kmla-wiki.13/\">WIKI forum</a>"
+            )
+            return wrap_html2(error_html, "Unavailable", debug, None), 503
+
+        # ─── Success path ───────────────────────────────────────────────────
         if ENABLE_DEBUG:
             debug += (
                 "<b>68kMLA Response:</b><br>"
@@ -810,14 +1066,13 @@ def handle_request(req):
 
         orig_soup = BeautifulSoup(r.text, "html.parser")
         span = orig_soup.find("span", attrs={"data-user-id": True})
-        if span:
-            user_id = span["data-user-id"]
-        else:
-            user_id = None
+        user_id = span["data-user-id"] if span else None
 
         inner = strip_to_html2(r.text)
-        title = (BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
+        title = (orig_soup.title or BeautifulSoup(r.text, 'html.parser').title or '68kMLA').string
         return wrap_html2(inner, title, debug, user_id), 200
+
+
 
     # ─── 11) Handle add-reply POSTs ───────────────────────────────────────────
     if req.method == 'POST' and 'add-reply' in full:

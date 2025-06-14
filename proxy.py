@@ -30,9 +30,9 @@ ERROR_HEADER       = "[[Macproxy Encountered an Error]]"
 override_extension = None
 
 # default user_agent
-# USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus)"
+USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus)"
 # for better working on some sites
-USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
+#USER_AGENT	    = "Lynx/2.9.0dev.12 libwww-FM/2.14 SSL-MM/1.4.1 GNUTLS/3.7.8"
 
 # ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
 def clear_image_cache():
@@ -104,42 +104,90 @@ def handle_matching_extension(module):
         override_extension = module.__name__
     return resp
 
+
+
 # ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
 def process_response(response, url):
-    # normalize to (content, status, headers)
+    """
+    This function expects `response` to be a tuple (content_bytes, status_code, headers_dict),
+    or a Flask Response/Werkzeug Response. It always returns a Flask Response object.
+    """
+
+    # — Step 1: Normalize `response` into (content_bytes, status, headers_dict) —
     if isinstance(response, tuple):
         if len(response) == 3:
-            content, status, headers = response
+            content_bytes, status, headers = response
         elif len(response) == 2:
-            content, status = response
+            content_bytes, status = response
             headers = {}
         else:
-            content, status, headers = response[0], 200, {}
+            content_bytes = response[0]
+            status = 200
+            headers = {}
     elif isinstance(response, (Response, WerkzeugResponse)):
+        # If an extension already returned a fully formed Flask Response, pass it straight through
         return response
     else:
-        content, status, headers = response, 200, {}
+        # Something else – treat as text, 200 OK
+        content_bytes = response if isinstance(response, bytes) else str(response).encode('utf-8', 'replace')
+        status = 200
+        headers = {}
 
     ctype = headers.get('Content-Type', '').lower()
     app.logger.debug(f"Processing response for {url} → Content-Type: {ctype}")
 
-    # ── IMAGE HANDLING ───────────────────────────────────────────────────────
-
-    # ── UNIVERSAL IMAGE CATCH & RE-ENCODE ───────────────────────────────────────
+    # — Step 2: If this is an image, re-encode/resize/convert via PIL —
     if ctype.startswith('image/'):
-        subtype = ctype.split('/', 1)[1].split(';', 1)[0]
-        data = content
+        data = content_bytes
+        img_bytes = data
+        out_ct    = ctype
 
-        # animated GIFs: leave alone
-        if subtype == 'gif':
-            img_bytes, out_ct = data, 'image/gif'
-        else:
-            # everything else → JPEG via PIL
-            try:
-                img_bytes, out_ct = _reencode_image(data)
-            except Exception as e:
-                app.logger.debug(f"PIL re-encode failed for {subtype}: {e}")
-                img_bytes, out_ct = data, ctype
+        try:
+            img = Image.open(io.BytesIO(data))
+            app.logger.debug("PIL opened image: format=%s mode=%s size=%s", img.format, img.mode, img.size)
+
+            # (2a) Flatten alpha onto white if needed
+            if img.mode in ('RGBA', 'LA') or (img.mode == 'P' and 'transparency' in img.info):
+                app.logger.debug("Image has transparency; flattening onto white")
+                bg = Image.new('RGB', img.size, (255, 255, 255))
+                rgba = img.convert('RGBA')
+                bg.paste(rgba, mask=rgba.split()[-1])
+                img = bg
+            else:
+                img = img.convert('RGB')
+
+            # (2b) Resize if requested by your config
+            if getattr(config, "RESIZE_IMAGES", False):
+                orig_w, orig_h = img.size
+                max_w = getattr(config, "MAX_IMAGE_WIDTH", orig_w)
+                max_h = getattr(config, "MAX_IMAGE_HEIGHT", orig_h)
+                scale = min(max_w / orig_w, max_h / orig_h, 1.0)
+                if scale < 1.0:
+                    new_size = (int(orig_w * scale), int(orig_h * scale))
+                    img = img.resize(new_size, Image.LANCZOS)
+                    app.logger.debug("Resized image to %s", new_size)
+
+            # (2c) Convert to GIF if requested; otherwise JPEG
+            if getattr(config, "CONVERT_IMAGES", False) and \
+               getattr(config, "CONVERT_IMAGES_TO_FILETYPE", "").lower() == "gif":
+                buf = io.BytesIO()
+                algo_name = getattr(config, "DITHERING_ALGORITHM", "FLOYDSTEINBERG").upper()
+                dither_const = getattr(Image, algo_name, Image.FLOYDSTEINBERG)
+                img.convert('P', dither=dither_const).save(buf, 'GIF')
+                img_bytes = buf.getvalue()
+                out_ct    = 'image/gif'
+                app.logger.debug("Converted image to GIF (dither=%s), size=%d", algo_name, len(img_bytes))
+            else:
+                buf = io.BytesIO()
+                img.save(buf, 'JPEG', progressive=False)
+                img_bytes = buf.getvalue()
+                out_ct    = 'image/jpeg'
+                app.logger.debug("Re-encoded image to JPEG, size=%d", len(img_bytes))
+
+        except Exception as e:
+            app.logger.debug("PIL failed for image; returning raw data: %r", e)
+            img_bytes = data
+            out_ct    = ctype
 
         resp = Response(img_bytes, status)
         resp.headers['Content-Type'] = out_ct
@@ -150,45 +198,109 @@ def process_response(response, url):
         })
         return resp
 
+    # — Step 3: If CSS/JS, run transcode_content (string→string), then wrap as bytes —
+    if ctype in ('text/css', 'text/javascript', 'application/javascript'):
+        try:
+            decoded = content_bytes.decode('utf-8', 'replace')
+            txt = transcode_content(decoded)
+            final_bytes = txt.encode('utf-8', 'replace')
+            r = Response(final_bytes, status)
+            r.headers['Content-Type'] = ctype
+            return r
+        except Exception as e:
+            app.logger.debug("transcode_content failed: %r", e)
+            # Fall back to raw
+            r = Response(content_bytes, status)
+            r.headers['Content-Type'] = ctype
+            return r
 
-
-
-
-
-
-
-    # ── CSS/JS TRANSCODING ────────────────────────────────────────────────────
-    if ctype in ('text/css','text/javascript','application/javascript'):
-        txt = transcode_content(content)
-        r = Response(txt, status)
-        r.headers['Content-Type'] = ctype
-        return r
-
-    # ── HTML REWRITING ────────────────────────────────────────────────────────
+    # — Step 4: HTML rewriting for anything that “looks like HTML/text” —
     non_transcode = (
-        'application/octet-stream','application/pdf','application/zip',
-        'audio/','video/','text/plain'
+        'application/octet-stream', 'application/pdf', 'application/zip',
+        'audio/', 'video/', 'text/plain'
     )
-    if ctype.startswith('text/html') or not any(ctype.startswith(n) for n in non_transcode):
-        if isinstance(content, bytes):
-            content = content.decode('utf-8', 'replace')
-        content = transcode_html(
-            content, url,
-            whitelisted_domains   = config.WHITELISTED_DOMAINS,
-            simplify_html         = config.SIMPLIFY_HTML,
-            tags_to_unwrap        = config.TAGS_TO_UNWRAP,
-            tags_to_strip         = config.TAGS_TO_STRIP,
-            attributes_to_strip   = config.ATTRIBUTES_TO_STRIP,
-            convert_characters    = config.CONVERT_CHARACTERS,
-            conversion_table      = config.CONVERSION_TABLE
-        )
+    final_response_content = content_bytes  # default if no HTML rewriting applies
 
-    # build final Flask response
-    resp = Response(content, status)
+    if ctype.startswith('text/html') or not any(ctype.startswith(n) for n in non_transcode):
+        # (4a) Decode bytes → str once
+        if isinstance(content_bytes, bytes):
+            html_content_str = content_bytes.decode('utf-8', 'replace')
+        else:
+            # In case an extension gave us a str instead
+            html_content_str = content_bytes
+
+        # (4b) Strip any leading <!doctype …> tag (first occurrence, case-insensitive)
+        html_content_str = re.sub(r'(?i)<!doctype.*?>', '', html_content_str, count=1)
+
+        # (4c) Strip any <!DOCTYPE …> declarations entirely
+        html_content_str = re.sub(r'(?i)<!DOCTYPE[^>]*>\s*', '', html_content_str)
+
+        # (4d) Collapse any “long” <html …> down to exactly "<html>"
+        html_content_str = re.sub(r'(?i)<html\b[^>]*>', '<html>', html_content_str)
+
+        # (4e) Hand off to your existing transcode_html pipeline
+        try:
+            final_transcoded = transcode_html(
+                html_content_str, url,
+                whitelisted_domains   = config.WHITELISTED_DOMAINS,
+                simplify_html         = config.SIMPLIFY_HTML,
+                tags_to_unwrap        = config.TAGS_TO_UNWRAP,
+                tags_to_strip         = config.TAGS_TO_STRIP,
+                attributes_to_strip   = config.ATTRIBUTES_TO_STRIP,
+                convert_characters    = config.CONVERT_CHARACTERS,
+                conversion_table      = config.CONVERSION_TABLE
+            )
+        except Exception as e:
+            app.logger.debug("transcode_html failed: %r", e)
+            final_transcoded = html_content_str
+
+        # (4f) Ensure we return bytes, not str
+        if isinstance(final_transcoded, bytes):
+            final_response_content = final_transcoded
+        else:
+            final_response_content = final_transcoded.encode('utf-8', 'replace')
+
+    # — Step 5: Build the final Flask response —
+    resp = Response(final_response_content, status)
     for k, v in headers.items():
-        if k.lower() not in ('content-encoding','content-length'):
+        lower = k.lower()
+        # Skip hop-by-hop or encoding headers
+        if lower not in (
+            'content-encoding', 'content-length', 'transfer-encoding',
+            'connection', 'proxy-authenticate', 'proxy-authorization'
+        ):
             resp.headers[k] = v
+
+    # Remove Transfer-Encoding if upstream set it
+    if 'Transfer-Encoding' in resp.headers:
+        del resp.headers['Transfer-Encoding']
+
     return resp
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ── END HTML REWRITING ────────────────────────────────────────────────────
+
+
 
 # ─── DEFAULT PROXY ──────────────────────────────────────────────────────────
 def handle_default_request():
