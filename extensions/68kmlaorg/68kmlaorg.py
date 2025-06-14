@@ -75,6 +75,39 @@ def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
 
+    # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
+
+
+    # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
+    for h2 in soup.find_all('h2'):
+        # look for the specific link inside the <h2>
+        a = h2.find(
+            'a',
+            href=re.compile(r'^/bb/index\.php#important-information\.\d+')
+        )
+        if a:
+            text = a.get_text(strip=True)
+            # replace the entire <h2>…</h2> with plain text plus colon
+            h2.replace_with(f"{text}:")
+            logger.debug(
+                "Flattened Important Information header to %r",
+                f"{text}:"
+            )
+
+
+    # ── BOLD “threads” LINKS ────────────────────────────────────────────────
+    for a in soup.find_all('a', href=re.compile(r'/bb/index\.php\?threads')):
+        # Capture whatever is already inside the <a>
+        inner_html = ''.join(str(c) for c in a.contents)
+        a.clear()  # remove the old contents
+        # Create <b> and put the old contents back inside it
+        b = soup.new_tag('b')
+        b.append(BeautifulSoup(inner_html, 'html.parser'))
+        a.append(b)
+        logger.debug("Bolded thread link: %s", a['href'])
+
+
+
     # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (black & white GIF) ───
     #import os
     #from utils.image_utils import fetch_and_cache_image
