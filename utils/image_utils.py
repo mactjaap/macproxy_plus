@@ -10,6 +10,8 @@ import requests
 from PIL import Image, UnidentifiedImageError
 from PILSVG import SVG
 
+import logging
+
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "cached_images")
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
@@ -88,53 +90,75 @@ def optimize_image(image_data, resize=True, max_width=512, max_height=342,
 		print(f"Error optimizing image: {str(e)}")
 		return image_data
 
-def fetch_and_cache_image(url, content=None, resize=True, max_width=512, max_height=342,
-						 convert=True, convert_to='gif', dithering='FLOYDSTEINBERG',
-						 hash_url=True):
-	try:
-		print(f"Processing image: {url}")
-		
-		# Generate filename with appropriate extension
-		extension = convert_to.lower() if convert and convert_to else "gif"
-		if hash_url:
-			file_name = hashlib.md5(url.encode()).hexdigest() + f".{extension}"
-		else:
-			file_name = url + f".{extension}"
-		file_path = os.path.join(CACHE_DIR, file_name)
-		
-		if not os.path.exists(file_path):
-			print(f"Optimizing and caching image: {url}")
-			if content is None:
-				response = requests.get(url, stream=True, headers={"User-Agent": USER_AGENT})
-				response.raise_for_status()
-				content = response.content
-			
-			# Only process if image conversion or resizing is enabled
-			if convert or resize:
-				optimized_image = optimize_image(
-					content,
-					resize=resize,
-					max_width=max_width,
-					max_height=max_height,
-					convert=convert,
-					convert_to=convert_to,
-					dithering=dithering
-				)
-			else:
-				optimized_image = content
-				
-			with open(file_path, 'wb') as f:
-				f.write(optimized_image)
-		else:
-			print(f"Image already cached: {url}")
-		
-		cached_url = f"/cached_image/{file_name}"
-		print(f"Cached URL: {cached_url}")
-		return cached_url
-		
-	except Exception as e:
-		print(f"Error processing image: {url}, Error: {str(e)}")
-		return None
+# utils/image_utils.py
+
+import os
+import requests
+from PIL import Image
+import hashlib
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Assuming a cache directory is defined, adjust if needed
+CACHE_DIR = "image_cache" 
+
+def fetch_and_cache_image(url):
+    """
+    Fetches an image from a URL, caches it, and converts it to a color GIF if it's a PNG.
+    Returns the local filename of the cached image.
+    """
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+
+    # Use a hash of the URL to create a unique filename
+    url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+    # Determine original extension
+    original_ext = url.split('.')[-1].lower()
+
+    # Define the target filename for GIF conversion
+    filename_base = url_hash
+    target_filename = os.path.join(CACHE_DIR, f"{filename_base}.gif")
+
+    if os.path.exists(target_filename):
+        logger.debug(f"Image already in cache: {target_filename}")
+        return target_filename
+
+    try:
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+
+        # Save original to a temporary file to load with PIL
+        temp_filepath = os.path.join(CACHE_DIR, f"{filename_base}.{original_ext}")
+        with open(temp_filepath, 'wb') as f:
+            for chunk in response.iter_content(8192):
+                f.write(chunk)
+
+        with Image.open(temp_filepath) as img:
+            if img.mode == 'RGBA':
+                # Create a white background for transparent PNGs
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3]) # 3 is the alpha channel
+                img = background
+            elif img.mode != 'RGB':
+                img = img.convert('RGB') # Ensure it's in RGB mode for proper palette conversion
+
+            # Convert to 'P' (palette) mode for GIF, optimizing the palette
+            # This is the key to getting color GIFs
+            img = img.convert('P', palette=Image.Palette.ADAPTIVE, colors=256)
+            
+            img.save(target_filename, format="GIF")
+
+        os.remove(temp_filepath) # Clean up the temporary file
+
+        logger.info(f"Cached and converted {url} to {target_filename} (color GIF)")
+        return target_filename
+
+    except Exception as e:
+        logger.error(f"Failed to fetch, cache, or convert image {url}: {e}")
+        # Re-raise or handle as appropriate for your application
+        raise
+
 
 # Ensure cache directory exists
 if not os.path.exists(CACHE_DIR):

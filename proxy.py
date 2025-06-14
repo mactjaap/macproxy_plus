@@ -1,314 +1,371 @@
-# Standard library imports
+#!/usr/bin/env python3
+# proxy.py
+
 import argparse
+import io
 import os
+import re
 import shutil
 import socket
 from urllib.parse import urlparse
 
-# Third-party imports
 import requests
-from flask import Flask, request, session, g, abort, Response, send_from_directory
+from flask import Flask, request, abort, Response, send_from_directory
 from werkzeug.serving import get_interface_ip
-from werkzeug.wrappers.response import Response as WerkzeugResponse
+from werkzeug.wrappers import Response as WerkzeugResponse
+from PIL import Image
 
-# First-party imports
 from utils.html_utils import transcode_html, transcode_content
 from utils.image_utils import is_image_url, fetch_and_cache_image, CACHE_DIR
 from utils.system_utils import load_preset
 
-
+# ─── APP SETUP ───────────────────────────────────────────────────────────────
 os.environ['FLASK_ENV'] = 'development'
 app = Flask(__name__)
-session = requests.Session()
 
-HTTP_ERRORS = (403, 404, 500, 503, 504)
-ERROR_HEADER = "[[Macproxy Encountered an Error]]"
-
-# Global variable to store the override extension
+# ─── GLOBALS & CONFIG ────────────────────────────────────────────────────────
+HTTP_ERRORS        = (403, 404, 500, 503, 504)
+ERROR_HEADER       = "[[Macproxy Encountered an Error]]"
 override_extension = None
 
-# User-Agent string
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36"
+PROXY_DOMAIN       = "proxy.macip.net"
+UPSTREAM_DOMAIN    = "68kmla.org"
+USER_AGENT         = "MacProxyPlus/1.0 (+https://github.com/hunterirving/macproxy_plus) fork (https://github.com/mactjaap/macproxy_plus) - website proxy version"
 
-# Call this function every time the proxy starts
+# ─── CLEAR IMAGE CACHE ON START ──────────────────────────────────────────────
 def clear_image_cache():
-	if os.path.exists(CACHE_DIR):
-		shutil.rmtree(CACHE_DIR)
-	os.makedirs(CACHE_DIR, exist_ok=True)
+    if os.path.exists(CACHE_DIR):
+        shutil.rmtree(CACHE_DIR)
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
 clear_image_cache()
 
-# Load preset immediately after config import
+# ─── LOAD PRESET & EXTENSIONS ────────────────────────────────────────────────
 config = load_preset()
-
-# Now get the settings we need after preset has potentially modified them
 ENABLED_EXTENSIONS = config.ENABLED_EXTENSIONS
 
-# Load extensions
 extensions = {}
 domain_to_extension = {}
-print('Enabled Extensions: ')
+app.logger.info(f"Enabled Extensions: {ENABLED_EXTENSIONS}")
 for ext in ENABLED_EXTENSIONS:
-	print(ext)
-	module = __import__(f"extensions.{ext}.{ext}", fromlist=[''])
-	extensions[ext] = module
-	domain_to_extension[module.DOMAIN] = module
+    module = __import__(f"extensions.{ext}.{ext}", fromlist=[''])
+    extensions[ext] = module
+    domain_to_extension[module.DOMAIN] = module
 
-@app.route("/cached_image/<path:filename>")
+# ─── IMAGE-CACHE ENDPOINT ───────────────────────────────────────────────────
+@app.route('/cached_image/<path:filename>')
 def serve_cached_image(filename):
-	return send_from_directory(CACHE_DIR, filename, mimetype='image/gif')
+    return send_from_directory(CACHE_DIR, filename, mimetype='image/gif')
 
-def handle_image_request(url):
-	# Pass config values to fetch_and_cache_image
-	cached_url = fetch_and_cache_image(
-		url,
-		resize=config.RESIZE_IMAGES,
-		max_width=config.MAX_IMAGE_WIDTH,
-		max_height=config.MAX_IMAGE_HEIGHT,
-		convert=config.CONVERT_IMAGES,
-		convert_to=config.CONVERT_IMAGES_TO_FILETYPE,
-		dithering=config.DITHERING_ALGORITHM
-	)
-	if cached_url:
-		return send_from_directory(CACHE_DIR, os.path.basename(cached_url), mimetype='image/gif')
-	else:
-		return abort(404, "Image not found or could not be processed")
-
-@app.route("/", defaults={"path": "/"}, methods=["GET", "POST"])
-@app.route("/<path:path>", methods=["GET", "POST"])
-def handle_request(path):
-	global override_extension
-	parsed_url = urlparse(request.url)
-	scheme = parsed_url.scheme
-	host = parsed_url.netloc.split(':')[0]  # Remove port if present
-	
-	if override_extension:
-		print(f'Current override extension: {override_extension}')
-
-	override_response = handle_override_extension(scheme)
-	if override_response is not None:
-		return process_response(override_response, request.url)
-
-	matching_extension = find_matching_extension(host)
-	if matching_extension:
-		response = handle_matching_extension(matching_extension)
-		return process_response(response, request.url)
-	
-	# Only handle image requests here if we're not using an extension
-	if is_image_url(request.url) and not (override_extension or matching_extension):
-		return handle_image_request(request.url)
-
-	return handle_default_request()
-
-def handle_override_extension(scheme):
-	global override_extension
-	if override_extension:
-		extension_name = override_extension.split('.')[-1]
-		if extension_name in extensions:
-			if scheme in ['http', 'https', 'ftp']:
-				response = extensions[extension_name].handle_request(request)
-				check_override_status(extension_name)
-				return process_response(response, request.url)
-			else:
-				print(f"Warning: Unsupported scheme '{scheme}' for override extension.")
-		else:
-			print(f"Warning: Override extension '{extension_name}' not found. Resetting override.")
-			override_extension = None
-	return None  # Return None if no override is active
-
-def check_override_status(extension_name):
-	global override_extension
-	if hasattr(extensions[extension_name], 'get_override_status') and not extensions[extension_name].get_override_status():
-		override_extension = None
-		print("Override disabled")
+# ─── HELPERS VOOR EXTENSIONS ─────────────────────────────────────────────────
+def handle_override_extension(req):
+    global override_extension
+    name = override_extension.split('.')[-1]
+    if name in extensions:
+        module = extensions[name]
+        resp = module.handle_request(req)
+        if hasattr(module, 'get_override_status') and not module.get_override_status():
+            override_extension = None
+        return resp
+    override_extension = None
+    return None
 
 def find_matching_extension(host):
-	for domain, extension in domain_to_extension.items():
-		if host.endswith(domain):
-			return extension
-	return None
+    for domain, module in domain_to_extension.items():
+        if host.endswith(domain):
+            return module
+    return None
 
-def handle_matching_extension(matching_extension):
-	global override_extension
-	print(f"Handling request with matching extension: {matching_extension.__name__}")
-	response = matching_extension.handle_request(request)
-	
-	if hasattr(matching_extension, 'get_override_status') and matching_extension.get_override_status():
-		override_extension = matching_extension.__name__
-		print(f"Override enabled for {override_extension}")
-	
-	return response
+def handle_matching_extension(module):
+    global override_extension
+    resp = module.handle_request(request)
+    if hasattr(module, 'get_override_status') and module.get_override_status():
+        override_extension = module.__name__
+    return resp
 
+# ─── MAIN ROUTE ──────────────────────────────────────────────────────────────
+@app.route('/', defaults={'path': '/'}, methods=['GET','POST'])
+@app.route('/<path:path>', methods=['GET','POST'])
+def handle_request(path):
+
+
+
+    # ── CUSTOM ATTACHMENT WARNING PAGE ON PUBLIC PROXY ─────────────────────────
+    host = request.host.split(':', 1)[0]
+    #if host == "proxy.macip.net" and "attachments/" in request.full_path:
+    if host == "proxy.macip.net" and re.search(r'/index\.php\?attachments/', request.full_path):
+        custom_html = """\
+<html>
+  <body>
+    <!-- EINDE MENU -->
+    <a href="/bb/index.php">Home</a> |
+    <a href="/bb/index.php?forums/">Forums</a> |
+    <a href="/bb/index.php?forums/68kmla-wiki.13/">Wiki</a> |
+    <a href="/bb/index.php?whats-new/">What’s new</a> |
+    <a href="/bb/index.php?media/">Media</a> |
+    <a href="/bb/index.php?resources/">Resources</a> |
+    <a href="/bb/index.php?members/">Members</a> |
+    <a href="/forums/archive/">Snitz Archive</a> |
+    <a href="https://www.patreon.com/68kmla">Patreon</a> |
+    <a href="/bb/index.php?search/">Search</a>
+    <br><br>
+    <form>
+      <label for="menu">Menu:</label>
+      <select id="menu" onchange="window.location.href=this.value;">
+        <option value="/bb/index.php">Home</option>
+        <option value="/bb/index.php?forums/">Forums</option>
+        <option value="/bb/index.php?whats-new/posts/">New posts</option>
+        <option value="/bb/index.php?whats-new/media/">New media</option>
+        <option value="/bb/index.php?whats-new/media-comments/">New media comments</option>
+        <option value="/bb/index.php?whats-new/resources/">New resources</option>
+        <option value="/bb/index.php?whats-new/profile-posts/">New profile posts</option>
+        <option value="/bb/index.php?whats-new/latest-activity/">Latest activity</option>
+        <option value="/bb/index.php?media/">Media</option>
+        <option value="/bb/index.php?resources/">Resources</option>
+        <option value="/bb/index.php?resources/latest-reviews">Resources latest reviews</option>
+        <option value="/bb/index.php?members/">Members</option>
+        <option value="/bb/index.php?online/">Current visitors</option>
+        <option value="/forums/archive/">Snitz Archive</option>
+        <option value="https://www.patreon.com/68kmla">Patreon</option>
+        <option value="/bb/index.php?search/">Search</option>
+        <option value="/forums/archive/">Snitz Archive</option>
+        <option value="/bb/index.php?forums/68kmla-wiki.13/">Wiki</option>
+      </select>
+    </form>
+    <hr>
+    <h1>Attachments, logins are not available on this public proxy.</h1>
+    <p>If you need to view attachments, please use the official 68kMLA gateway.</p>
+    <p>This for all actions which need a login.</p>
+  </body>
+</html>"""
+        return Response(custom_html, 200, {'Content-Type': 'text/html'})
+
+    global override_extension
+    
+    try:
+        # 1) Override‐extension?
+        if override_extension:
+            resp = handle_override_extension(request)
+            if resp is not None:
+                return process_response(resp, request.url)
+
+        # 2) Host‐check: is dit verzoek naar proxy.macip.net?
+        host = request.host.split(':')[0]
+        if host == PROXY_DOMAIN:
+            # Blokkeer login‐pogingen door “login” in path
+            if 'login' in path.lower():
+                return Response(
+                    "<html><body><h1>Login disabled</h1></body></html>",
+                    403,
+                    {"Content-Type": "text/html"}
+                )
+            # Anders: route via 68kmlaorg‐extensie
+            if '68kmlaorg' in extensions:
+                module = extensions['68kmlaorg']
+                resp = handle_matching_extension(module)
+                return process_response(resp, request.url)
+            else:
+                app.logger.error("68kmlaorg‐extensie is niet ingeladen maar proxy.macip.net kreeg een verzoek.")
+                abort(500, ERROR_HEADER + " → 68kmlaorg‐extensie niet gevonden")
+
+        # 3) Andere extension‐host (bv. reddit.com, wikipedia.org, etc.)
+        module = find_matching_extension(host)
+        if module:
+            resp = handle_matching_extension(module)
+            return process_response(resp, request.url)
+
+        # 4) Fallback: alle andere hosts → standaard doorsturen naar 68kmla.org
+        return handle_default_request()
+
+    except Exception as e:
+        app.logger.exception("Onverwachte fout in handle_request:")
+        abort(500, ERROR_HEADER + str(e))
+
+# ─── PROCESS RESPONSE ────────────────────────────────────────────────────────
 def process_response(response, url):
-	print(f"Processing response for URL: {url}")
+    if isinstance(response, tuple):
+        if len(response) == 3:
+            content, status, headers = response
+        elif len(response) == 2:
+            content, status = response
+            headers = {}
+        else:
+            content, status, headers = response[0], 200, {}
+    elif isinstance(response, (Response, WerkzeugResponse)):
+        return response
+    else:
+        content, status, headers = response, 200, {}
 
-	if isinstance(response, tuple):
-		if len(response) == 3:
-			content, status_code, headers = response
-		elif len(response) == 2:
-			content, status_code = response
-			headers = {}
-		else:
-			content = response[0]
-			status_code = 200
-			headers = {}
-	elif isinstance(response, (Response, WerkzeugResponse)):
-		return response
-	else:
-		content = response
-		status_code = 200
-		headers = {}
+    # Verwijder eventuele Set-Cookie in response headers
+    headers = {k: v for k, v in headers.items() if k.lower() != 'set-cookie'}
 
-	content_type = headers.get('Content-Type', '').lower()
-	print(f"Content-Type: {content_type}")
+    ctype = headers.get('Content-Type', '').lower()
+    app.logger.debug(f"Processing response voor {url} → Content-Type: {ctype}")
 
-	if content_type.startswith('image/'):
-		# For image content, use the fetch_and_cache_image function with config values
-		cached_url = fetch_and_cache_image(
-			url,
-			content,
-			resize=config.RESIZE_IMAGES,
-			max_width=config.MAX_IMAGE_WIDTH,
-			max_height=config.MAX_IMAGE_HEIGHT,
-			convert=config.CONVERT_IMAGES,
-			convert_to=config.CONVERT_IMAGES_TO_FILETYPE,
-			dithering=config.DITHERING_ALGORITHM
-		)
-		if cached_url:
-			return send_from_directory(CACHE_DIR, os.path.basename(cached_url), mimetype='image/gif')
-		else:
-			return abort(404, "Image could not be processed")
+    # ── IMAGE HANDLING ───────────────────────────────────────────────────────
+    if ctype.startswith('image/'):
+        subtype = ctype.split('/', 1)[1].split(';', 1)[0]
+        data = content
+        if subtype == 'gif':
+            img_bytes, out_ct = data, 'image/gif'
+        else:
+            try:
+                img_bytes, out_ct = _reencode_image(data)
+            except Exception as e:
+                app.logger.debug(f"PIL re-encode failed voor {subtype}: {e}")
+                img_bytes, out_ct = data, ctype
+        resp = Response(img_bytes, status)
+        resp.headers['Content-Type'] = out_ct
+        resp.headers.update({
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma':        'no-cache',
+            'Expires':       '0',
+        })
+        return resp
 
-	# Handle CSS and JavaScript
-	if content_type in ['text/css', 'text/javascript', 'application/javascript', 'application/x-javascript']:
-		content = transcode_content(content)
-		response = Response(content, status_code)
-		response.headers['Content-Type'] = content_type
-		return response
+    # ── CSS/JS TRANSCODING ────────────────────────────────────────────────────
+    if ctype in ('text/css', 'text/javascript', 'application/javascript'):
+        decoded_content = content.decode('utf-8', errors='replace') if isinstance(content, (bytes, bytearray)) else str(content)
+        txt = transcode_content(decoded_content)
+        final_css = txt.encode('utf-8', errors='replace')
+        r = Response(final_css, status)
+        r.headers['Content-Type'] = ctype
+        return r
 
-	# List of content types that should not be transcoded
-	non_transcode_types = [
-		'application/octet-stream',
-		'application/pdf',
-		'application/zip',
-		'application/x-zip-compressed',
-		'application/x-rar-compressed',
-		'application/x-tar',
-		'application/x-gzip',
-		'application/x-bzip2',
-		'application/x-7z-compressed',
-		'application/vnd.openxmlformats-officedocument',
-		'application/vnd.ms-excel',
-		'application/vnd.ms-powerpoint',
-		'application/msword',
-		'audio/',
-		'video/',
-		'text/plain'
-	]
+    # ── HTML REWRITING ────────────────────────────────────────────────────────
+    non_transcode = (
+        'application/octet-stream', 'application/pdf', 'application/zip',
+        'audio/', 'video/', 'text/plain'
+    )
+    if ctype.startswith('text/html') or not any(ctype.startswith(n) for n in non_transcode):
+        if isinstance(content, (bytes, bytearray)):
+            html_content_str = content.decode('utf-8', 'replace')
+        else:
+            html_content_str = str(content)
 
-	# Check if content type is in the list of non-transcode types
-	should_transcode = not any(content_type.startswith(t) for t in non_transcode_types)
+        html_content_str = re.sub(r'(?i)<!doctype.*?>', '', html_content_str, count=1)
+        html_content_str = re.sub(r'(?i)<!DOCTYPE[^>]*>\s*', '', html_content_str)
+        html_content_str = re.sub(r'(?i)<html\b[^>]*>', '<html>', html_content_str)
 
-	if should_transcode:
-		print("Transcoding content")
-		if isinstance(content, bytes):
-			content = content.decode('utf-8', errors='replace')
-		content = transcode_html(
-			content,
-			url,
-			whitelisted_domains=config.WHITELISTED_DOMAINS,
-			simplify_html=config.SIMPLIFY_HTML,
-			tags_to_unwrap=config.TAGS_TO_UNWRAP,
-			tags_to_strip=config.TAGS_TO_STRIP,
-			attributes_to_strip=config.ATTRIBUTES_TO_STRIP,
-			convert_characters=config.CONVERT_CHARACTERS,
-			conversion_table=config.CONVERSION_TABLE
-		)
-	else:
-		print(f"Content type {content_type} should not be transcoded, passing through unchanged")
+        final_transcoded = transcode_html(
+            html_content_str, url,
+            whitelisted_domains   = config.WHITELISTED_DOMAINS,
+            simplify_html         = config.SIMPLIFY_HTML,
+            tags_to_unwrap        = config.TAGS_TO_UNWRAP,
+            tags_to_strip         = config.TAGS_TO_STRIP,
+            attributes_to_strip   = config.ATTRIBUTES_TO_STRIP,
+            convert_characters    = config.CONVERT_CHARACTERS,
+            conversion_table      = config.CONVERSION_TABLE
+        )
 
-	response = Response(content, status_code)
-	for key, value in headers.items():
-		if key.lower() not in ['content-encoding', 'content-length']:
-			response.headers[key] = value
+        try:
+            html_str = final_transcoded if isinstance(final_transcoded, str) else final_transcoded.decode('utf-8', 'replace')
+            html_str = re.sub(r'action="https?://68kmla\.org', 'action="', html_str)
+            html_str = re.sub(r'href="https?://68kmla\.org', 'href="', html_str)
+            final_transcoded = html_str
+        except Exception:
+            pass
 
-	print("Finished processing response")
-	return response
+        if isinstance(final_transcoded, (bytes, bytearray)):
+            final_response_content = final_transcoded
+        else:
+            final_response_content = final_transcoded.encode('utf-8', errors='replace')
+    else:
+        final_response_content = content
 
+    resp = Response(final_response_content, status)
+    for k, v in headers.items():
+        if k.lower() not in (
+            'content-encoding',
+            'content-length',
+            'transfer-encoding',
+            'connection',
+            'proxy-authenticate',
+            'proxy-authorization'
+        ):
+            resp.headers[k] = v
+    if 'Transfer-Encoding' in resp.headers:
+        del resp.headers['Transfer-Encoding']
+    return resp
+
+# ─── DEFAULT PROXY ──────────────────────────────────────────────────────────
 def handle_default_request():
-	url = request.url.replace("https://", "http://", 1)
-	headers = prepare_headers()
-	
-	print(f"Handling default request for URL: {url}")
-	
-	try:
-		resp = send_request(url, headers)
-		content = resp.content
-		status_code = resp.status_code
-		headers = dict(resp.headers)
-		return process_response((content, status_code, headers), url)
-	except Exception as e:
-		print(f"Error in handle_default_request: {str(e)}")
-		return abort(500, ERROR_HEADER + str(e))
+    path_only = request.path
+    qs = request.query_string.decode('utf-8')
+    upstream = f"https://{UPSTREAM_DOMAIN}{path_only}"
+    if qs:
+        upstream += "?" + qs
 
+    # Route via extension voor alle andere paths
+    if '68kmlaorg' in extensions:
+        module = extensions['68kmlaorg']
+        resp = handle_matching_extension(module)
+        return process_response(resp, request.url)
+
+    # Indien extensie ontbreekt, val terug op direct verzoek zonder cookies
+    req_headers = prepare_headers()
+    try:
+        if request.method == 'POST':
+            r = requests.post(upstream, data=request.form, headers=req_headers, allow_redirects=True)
+        else:
+            r = requests.get(upstream, params=request.args, headers=req_headers, allow_redirects=True)
+        resp_headers = {k: v for k, v in r.headers.items() if k.lower() != 'set-cookie'}
+        return process_response((r.content, r.status_code, resp_headers), upstream)
+    except Exception as e:
+        abort(500, ERROR_HEADER + str(e))
+
+# ─── HEADER PREP ────────────────────────────────────────────────────────────
 def prepare_headers():
-	headers = {
-		"Accept": request.headers.get("Accept"),
-		"Accept-Language": request.headers.get("Accept-Language"),
-		"Referer": request.headers.get("Referer"),
-		"User-Agent": USER_AGENT,
-	}
-	return headers
+    return {
+        'Accept':          request.headers.get('Accept'),
+        'Accept-Language': request.headers.get('Accept-Language'),
+        'Referer':         request.headers.get('Referer'),
+        'User-Agent':      USER_AGENT,
+    }
 
-def send_request(url, headers):
-	print(f"Sending request to: {url}")
-	if request.method == "POST":
-		return session.post(url, data=request.form, headers=headers, allow_redirects=True)
-	else:
-		return session.get(url, params=request.args, headers=headers)
+# ─── IMAGE RE-ENCODE HELPER ─────────────────────────────────────────────────
+def _reencode_image(data: bytes) -> tuple[bytes,str]:
+    buff = io.BytesIO(data)
+    img = Image.open(buff)
+    if img.mode in ('RGBA','LA') or (img.mode=='P' and 'transparency' in img.info):
+        bg = Image.new('RGB', img.size, (255,255,255))
+        rgba = img.convert('RGBA')
+        bg.paste(rgba, mask=rgba.split()[-1])
+        img = bg
+    else:
+        img = img.convert('RGB')
+    out = io.BytesIO()
+    img.save(out, 'JPEG', progressive=False)
+    return out.getvalue(), 'image/jpeg'
 
+# ─── OPTIONAL: LIGHT-BLUE BG VOOR 68kmla.org ─────────────────────────────────
 @app.after_request
-def apply_caching(resp):
-	try:
-		resp.headers["Content-Type"] = g.content_type
-	except:
-		pass
-	return resp
+def inject_body_bgcolor(resp: Response):
+    ct   = resp.headers.get("Content-Type","")
+    if not ct.startswith("text/html"):
+        return resp
+    host = urlparse(request.url).netloc.split(":",1)[0]
+    if host != UPSTREAM_DOMAIN:
+        return resp
+    html = resp.get_data(as_text=True)
+    new  = re.sub(r"<body[^>]*>", '<body bgcolor="#F2F8FD">', html, count=1, flags=re.IGNORECASE)
+    resp.set_data(new)
+    return resp
 
-def get_proxy_hostname(hostname):
-	# Based on the `log_startup` function from werkzeug.serving.
-	# Translates a "bind all addresses" string into a real IP
-	# (or returns the hostname if one was set)
-	if hostname == "0.0.0.0":
-		display_hostname = get_interface_ip(socket.AF_INET)
-	elif hostname == "::":
-		display_hostname = get_interface_ip(socket.AF_INET6)
-	else:
-		display_hostname = hostname
-	return display_hostname
+# ─── UTIL: GET PROXY HOSTNAME ───────────────────────────────────────────────
+def get_proxy_hostname(bind: str) -> str:
+    if bind == '0.0.0.0':
+        return get_interface_ip(socket.AF_INET)
+    if bind == '::':
+        return get_interface_ip(socket.AF_INET6)
+    return bind
 
-if __name__ == "__main__":
-	parser = argparse.ArgumentParser(description="Macproxy command line arguments")
-	parser.add_argument(
-		"--host",
-		type=str,
-		default="0.0.0.0",
-		action="store",
-		help="Host IP the web server will run on",
-	)
-	parser.add_argument(
-		"--port",
-		type=int,
-		default=5001,
-		action="store",
-		help="Port number the web server will run on",
-	)
-	arguments = parser.parse_args()
+# ─── RUN ────────────────────────────────────────────────────────────────────
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description='Macproxy command line arguments')
+    p.add_argument('--host', type=str, default='0.0.0.0')
+    p.add_argument('--port', type=int, default=5001)
+    args = p.parse_args()
 
-	# Translate the bind address (typically 0.0.0.0 or ::) to a friendly
-	# hostname / IP, and store it and the port in the application config
-	# object. This will be used if we need to generate URLs to the proxy itself
-	# in the HTML (as opposed to the site we are proxying the request to).
-	app.config['MACPROXY_HOST_AND_PORT'] = f"{get_proxy_hostname(arguments.host)}:{arguments.port}"
-
-	app.run(host=arguments.host, port=arguments.port, debug=False)
+    app.config['MACPROXY_HOST_AND_PORT'] = f"{get_proxy_hostname(args.host)}:{args.port}"
+    app.run(host=args.host, port=args.port, debug=False)
