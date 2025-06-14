@@ -1008,6 +1008,66 @@ def handle_request(req):
         title = (BeautifulSoup(r.text, 'html.parser').title or 'Login').string
         return wrap_html2(inner, title, debug, user_id), 200
 
+
+
+
+
+
+    # ─── GET register form ───────────────────────────────────────────────────  
+    if req.method == 'GET' and 'register/' in full and 'register/register' not in full:
+        url = f"https://{DOMAIN}/bb/index.php?register/"
+        logger.debug("Fetching register form: %s", url)
+        r = SESSION.get(url, headers={'User-Agent': request.headers.get('User-Agent','')})
+        if ENABLE_DEBUG:
+            debug += (
+                "<b>68kMLA Response:</b><br>"
+                f"Status: {r.status_code}<br>Headers: {dict(r.headers)}<br><br>"
+            )
+        orig_soup = BeautifulSoup(r.text, "html.parser")
+        span = orig_soup.find("span", attrs={"data-user-id": True})
+        user_id = span["data-user-id"] if span else None
+
+        inner = strip_to_html2(r.text)
+        title = (orig_soup.title or BeautifulSoup(r.text, 'html.parser').title or "Register").string
+        return wrap_html2(inner, title, debug, user_id), 200
+
+    # ─── POST register ───────────────────────────────────────────────────────  
+    if req.method == 'POST' and 'register/register' in full:
+        url = f"https://{DOMAIN}/{path}"
+        logger.debug("Submitting registration: %s", url)
+        r = SESSION.post(
+            url,
+            data=req.form,
+            headers={'User-Agent': request.headers.get('User-Agent','')},
+            allow_redirects=False
+        )
+
+        # on success there’s usually a redirect
+        if r.status_code in (301, 302, 303):
+            loc = r.headers.get('Location', '')
+            if loc.startswith('/'):
+                loc = f"https://{DOMAIN}{loc}"
+            logger.debug("Registration redirected to %s", loc)
+            r2 = SESSION.get(loc, headers={'User-Agent': request.headers.get('User-Agent','')})
+            orig = BeautifulSoup(r2.text, "html.parser")
+            span = orig.find("span", attrs={"data-user-id": True})
+            user_id = span["data-user-id"] if span else None
+
+            inner = strip_to_html2(r2.text)
+            title = (orig.title or BeautifulSoup(r2.text, 'html.parser').title or "Registration Complete").string
+            return wrap_html2(inner, title, debug, user_id), 200
+
+        # otherwise show any errors (e.g. validation failures)
+        orig = BeautifulSoup(r.text, "html.parser")
+        span = orig.find("span", attrs={"data-user-id": True})
+        user_id = span["data-user-id"] if span else None
+
+        inner = strip_to_html2(r.text)
+        title = (orig.title or BeautifulSoup(r.text, 'html.parser').title or "Registration Result").string
+        return wrap_html2(inner, title, debug, user_id), r.status_code
+
+
+
     # ─── 8) POST login ─────────────────────────────────────────────────────────
     if req.method == 'POST' and 'login/login' in full:
         return _do_login(req, debug)
