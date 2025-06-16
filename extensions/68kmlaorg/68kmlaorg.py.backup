@@ -75,91 +75,6 @@ def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
 
-    # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
-
-
-    # ── ADD SNIPPET: Flatten “Important Information” header and remove <h3> ───────────────
-    for h2 in soup.find_all('h2'):
-        a = h2.find(
-            'a',
-            href=re.compile(r'^/bb/index\.php#important-information\.\d+')
-        )
-        if a:
-            text = a.get_text(strip=True)
-            # replace the entire <h2>…</h2> with plain text plus colon
-            h2.replace_with(f"<br>{text}:")
-            logger.debug(
-                "Flattened Important Information header to %r",
-                f"{text}:"
-            )
-
-    # ── REMOVE any <h3> tags (and their links) in Important Information blocks ───────────────
-#    for h3 in soup.find_all('h3'):
-#        # if needed, you can further filter by text or parent context
-#        h3.decompose()
-#        logger.debug("Removed <h3> tag: %r", h3)
-
-
-
-    # ── BOLD “threads” LINKS ────────────────────────────────────────────────
-    for a in soup.find_all('a', href=re.compile(r'/bb/index\.php\?threads')):
-        # Capture whatever is already inside the <a>
-        inner_html = ''.join(str(c) for c in a.contents)
-        a.clear()  # remove the old contents
-        # Create <b> and put the old contents back inside it
-        b = soup.new_tag('b')
-        b.append(BeautifulSoup(inner_html, 'html.parser'))
-        a.append(b)
-        logger.debug("Bolded thread link: %s", a['href'])
-
-# SIMPLE TIME
-
-#    # ── FLATTEN all <time> tags with data-date-string & data-time-string ───────
-#    for t in soup.find_all('time', attrs={'data-date-string': True, 'data-time-string': True}):
-#        date = t['data-date-string']
-#        time = t['data-time-string']
-#        # replace the entire <time>…</time> with plain text
-#        t.replace_with(f"{date} at {time}")
-#        logger.debug("Flattened <time> tag → %r", f"{date} at {time}")
-
-# TIME ON PAGES
-
-        # ── ENHANCED: FLATTEN all <time> tags with relative “ago” + TZ ────────
-        import datetime as _dt
-        for t in soup.find_all('time', attrs={'datetime': True, 'data-date-string': True, 'data-time-string': True}):
-            # parse the ISO datetime (e.g. "2025-06-16T17:09:54+0100")
-            dt_str = t['datetime']
-            dt_obj = _dt.datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S%z")
-
-            # compute “now” in the same tz, and the delta
-            now   = _dt.datetime.now(dt_obj.tzinfo)
-            delta = now - dt_obj
-
-            # human-friendly “ago”
-            if delta.days >= 1:
-                ago = f"{delta.days} day{'s' if delta.days != 1 else ''} ago"
-            elif delta.seconds >= 3600:
-                h   = delta.seconds // 3600
-                ago = f"{h} hour{'s' if h != 1 else ''} ago"
-            elif delta.seconds >= 60:
-                m   = delta.seconds // 60
-                ago = f"{m} minute{'s' if m != 1 else ''} ago"
-            else:
-                ago = "just now"
-
-            # pull the forum-rendered date & time
-            date = t['data-date-string']   # e.g. "Jun 16, 2025"
-            time = t['data-time-string']   # e.g. "5:09 PM"
-            # get the zone abbreviation (falls back to +HHMM if no name)
-            zone = dt_obj.strftime("%Z") or dt_obj.strftime("%z")
-
-            replacement = f"{date} at {time} {zone} ({ago})"
-            t.replace_with(replacement)
-            logger.debug("Flattened <time> → %r", replacement)
-
-
-
-
     # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (black & white GIF) ───
     #import os
     #from utils.image_utils import fetch_and_cache_image
@@ -178,30 +93,11 @@ def strip_to_html2(html: str) -> str:
     #        logger.warning("Failed to cache emoji %s: %r", original, e)
 
 
-# extensions/68kmlaorg/68kmlaorg.py
 
-    # ── CACHE JoyPixels emoji & rewrite to local /cached_image path (color GIF) ───
-    import os
-    from utils.image_utils import fetch_and_cache_image
-
-    for img in soup.find_all("img", src=lambda v: v and "cdn.jsdelivr.net/joypixels" in v):
-        original = img["src"]
-        try:
-            # download & cache returns the local filename (may include dirs)
-            fname = fetch_and_cache_image(original)
-            # only keep the basename to avoid double /cached_image/
-            basename = os.path.basename(fname)
-            # rewrite to our cached GIF (will be color)
-            img["src"] = f"/cached_image/{basename}"
-            # --- START ADDITION ---
-            # Set explicit width and height for a normal emoji size
-            img["width"] = "20"
-            img["height"] = "20"
-            # --- END ADDITION ---
-            logger.debug("Cached JoyPixels emoji %s → /cached_image/%s (color GIF)", original, basename)
-        except Exception as e:
-            logger.warning("Failed to cache emoji %s: %r", original, e)
-
+    except Exception as e:
+        logger.error(f"Failed to fetch, cache, or convert image {url}: {e}")
+        # Re-raise or handle as appropriate for your application
+        raise
 
     # ── REMOVE: any <title> tags accidentally carried into inner ─────────────
     for t in soup.find_all("title"):
@@ -433,29 +329,10 @@ def strip_to_html2(html: str) -> str:
 
 
 
-    # ── ADD "What’s New" POST-style button after <h1>68kMLA</h1> ──────────────
-#    for h1 in soup.find_all('h1', string=lambda t: t and t.strip() == "68kMLA"):
-#        # build the form fragment
-#        fragment = BeautifulSoup(
-#            '<form action="/bb/index.php?whats-new/" method="post">'
-#            '<input type="submit" value="What’s new"/>'
-#            '</form><br>',
-#            'html.parser'
-#        )
-#        form = fragment.find('form')
-#
-#        # insert it right after the <h1>
-#        h1.insert_after(form)
-#        logger.debug("Inserted What’s new button after <h1>68kMLA</h1>")
-
-
-    # ── ADD inline “What’s New” link after <h1>68kMLA</h1> ────────────────
-    for h1 in soup.find_all('h1', string=lambda t: t and t.strip() == "68kMLA"):
-        a = soup.new_tag('a', href="/bb/index.php?whats-new/")
-        a.string = "What’s new"
-        h1.insert_after(a)
-        logger.debug("Inserted inline What’s new link after <h1>68kMLA</h1>")
-
+    # Voeg <hr> vóór elke <h1>
+    for h1 in soup.find_all("h1"):
+        h1.insert_before(soup.new_tag("hr"))
+        logger.debug("Inserted <hr> before <h1>")
 
     # Voeg twee <br> vóór elke avatar link
     for a in soup.find_all('a'):
@@ -524,24 +401,6 @@ def strip_to_html2(html: str) -> str:
     if body and "data-template" in body.attrs:
         logger.debug("Removing data-template attribute from <body>")
         del body["data-template"]
-
-
-
-    # --- START ADDITION: Remove <br> tags around cached emoji images ---
-    # Find all <img> tags that are identified as cached emoji (src contains /cached_image/)
-    for img in soup.find_all("img", src=lambda v: v and "/cached_image/" in v):
-        # Check if the previous sibling is a <br> tag and remove it
-        prev_sibling = img.previous_sibling
-        if prev_sibling and prev_sibling.name == "br":
-            prev_sibling.decompose()
-            logger.debug("Removed <br> before cached emoji: %s", img.get("src"))
-        
-        # Check if the next sibling is a <br> tag and remove it
-        next_sibling = img.next_sibling
-        if next_sibling and next_sibling.name == "br":
-            next_sibling.decompose()
-            logger.debug("Removed <br> after cached emoji: %s", img.get("src"))
-    # --- END ADDITION ---
 
     return str(soup)
 
@@ -915,28 +774,6 @@ def handle_request(req):
         title_tag = BeautifulSoup(r.text, 'html.parser').title
         title = title_tag.string if title_tag else "Reply Result"
         return wrap_html2(inner, title, debug, user_id), r.status_code
-
-
-
-
-    # ─── Handle “What’s new” POST by proxying it as a GET ────────────────────
-    if req.method == 'POST' and 'whats-new/' in full:
-        url = f"https://{DOMAIN}/bb/index.php?whats-new/"
-        logger.debug("Treating What’s new POST as GET → %s", url)
-        r = SESSION.get(
-            url,
-            headers={'User-Agent': request.headers.get('User-Agent', '')}
-        )
-        # extract user_id if logged in
-        orig_soup = BeautifulSoup(r.text, 'html.parser')
-        span = orig_soup.find("span", attrs={"data-user-id": True})
-        user_id = span["data-user-id"] if span else None
-
-        inner = strip_to_html2(r.text)
-        title = (orig_soup.title.string if orig_soup.title else "What’s new")
-        return wrap_html2(inner, title, debug, user_id), 200
-
-
 
     # ─── Method Not Allowed (als we hier belanden) ─────────────────────────────
     logger.debug("Method not allowed: %s %s", req.method, req.full_path)

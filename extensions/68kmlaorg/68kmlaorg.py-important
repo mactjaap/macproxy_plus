@@ -78,8 +78,9 @@ def strip_to_html2(html: str) -> str:
     # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
 
 
-    # ── ADD SNIPPET: Flatten “Important Information” header and remove <h3> ───────────────
+    # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
     for h2 in soup.find_all('h2'):
+        # look for the specific link inside the <h2>
         a = h2.find(
             'a',
             href=re.compile(r'^/bb/index\.php#important-information\.\d+')
@@ -92,13 +93,6 @@ def strip_to_html2(html: str) -> str:
                 "Flattened Important Information header to %r",
                 f"{text}:"
             )
-
-    # ── REMOVE any <h3> tags (and their links) in Important Information blocks ───────────────
-#    for h3 in soup.find_all('h3'):
-#        # if needed, you can further filter by text or parent context
-#        h3.decompose()
-#        logger.debug("Removed <h3> tag: %r", h3)
-
 
 
     # ── BOLD “threads” LINKS ────────────────────────────────────────────────
