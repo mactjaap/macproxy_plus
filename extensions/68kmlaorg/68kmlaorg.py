@@ -77,6 +77,12 @@ def strip_to_html2(html: str) -> str:
 
     # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
 
+    # ── REPLACE <div class="bbWrapper">…</div> WITH [ … ] ────────────────
+    #for div in soup.find_all('div', class_='bbWrapper'):
+    #    inner_html = div.decode_contents()
+    #    replacement = f'[{inner_html}]'
+    #    div.replace_with(BeautifulSoup(replacement, 'html.parser'))
+    #    logger.debug('Replaced <div class="bbWrapper">…</div> with: %r', replacement)
 
     # ── ADD SNIPPET: Flatten “Important Information” header and remove <h3> ───────────────
     for h2 in soup.find_all('h2'):
@@ -98,6 +104,15 @@ def strip_to_html2(html: str) -> str:
 #        # if needed, you can further filter by text or parent context
 #        h3.decompose()
 #        logger.debug("Removed <h3> tag: %r", h3)
+
+
+
+    # ── REPLACE <p>...</p> WITH <br>TEXT<br> ─────────────────────────────
+    for p in soup.find_all('p'):
+        text = p.get_text(strip=True)
+        new_html = f"{text}"
+        p.replace_with(BeautifulSoup(new_html, 'html.parser'))
+        logger.debug("Replaced <p>…</p> with <br>text<br>: %r", text)
 
 
 
