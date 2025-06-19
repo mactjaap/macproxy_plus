@@ -77,6 +77,49 @@ def strip_to_html2(html: str) -> str:
 
     # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
 
+
+
+    # ── REWRITE /bb/proxy.php?image=… images if fetchable, else skip ──────────
+    for img in soup.find_all('img', src=re.compile(r'/bb/proxy\.php\?image=')):
+        orig_src = img['src']
+        match = re.search(r'image=([^&]+)', orig_src)
+        if not match:
+            continue
+        real_url = urllib.parse.unquote(match.group(1))
+        # Skip SVGs entirely
+        if real_url.lower().endswith('.svg'):
+            logger.debug("Skipped SVG image (PIL unsupported): %s", real_url)
+            continue
+        # Try fetching the image to see if it’s available
+        fetchable = True
+        try:
+            resp = SESSION.get(real_url, timeout=3)
+            if resp.status_code != 200 or not resp.content:
+                fetchable = False
+                logger.debug("Image not fetchable (HTTP %s): %s", resp.status_code, real_url)
+        except Exception as e:
+            fetchable = False
+            logger.debug("Image fetch error: %s [%r]", real_url, e)
+        if fetchable:
+            img['src'] = real_url
+            logger.debug("Rewrote proxy.php image %s → %s", orig_src, real_url)
+            # Try resizing image as before
+            try:
+                buf = io.BytesIO(resp.content)
+                image = Image.open(buf)
+                w, h = image.size
+                max_w, max_h = 512, 342
+                scale = min(max_w / w, max_h / h, 1)
+                new_w, new_h = int(w * scale), int(h * scale)
+                img['width'] = str(new_w)
+                img['height'] = str(new_h)
+                logger.debug("Scaled <%s> from %dx%d to %dx%d", real_url, w, h, new_w, new_h)
+            except Exception as e:
+                logger.debug("Couldn’t resize image %s: %r", real_url, e)
+        else:
+            logger.debug("Did not rewrite proxy.php image %s (unfetchable)", orig_src)
+
+
     # ── REPLACE <div class="bbWrapper">…</div> WITH [ … ] ────────────────
     #for div in soup.find_all('div', class_='bbWrapper'):
     #    inner_html = div.decode_contents()
@@ -471,7 +514,6 @@ def strip_to_html2(html: str) -> str:
         h1.insert_after(a)
         logger.debug("Inserted inline What’s new link after <h1>68kMLA</h1>")
 
-
     # Voeg twee <br> vóór elke avatar link
     for a in soup.find_all('a'):
         img = a.find('img', src=re.compile(r'/bb/data/avatars/'))
@@ -788,6 +830,7 @@ def handle_request(req):
             },
             direct_passthrough=True
         )
+
 
     # ─── 3) Direct Snitz Archive ─────────────────────────────────────────────────
     if req.method == 'GET' and path.startswith('forums/archive'):
