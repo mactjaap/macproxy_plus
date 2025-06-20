@@ -28,7 +28,7 @@ ALLOWED_TAGS = {
     'h1','h2','h3','h4','h5','h6',
     'p','ul','li','a','br','hr','pre','code',
     'form','input','textarea','select','option','button',
-    'img','b'
+    'img','b','i'
 }
 
 # ─── Logging Setup ───────────────────────────────────────────────────────────
@@ -97,6 +97,35 @@ def strip_to_html2(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
 
 # ── START YO ADD SNIPLETS HERE AFTER ───────────────────────────────────────
+
+
+    # ── Replace signature aside blocks with plain text inside [ ... ] ───────────
+    for aside in soup.find_all("aside", class_="message-signature"):
+        # Convert all proxy.php links to direct links
+        for a in aside.find_all("a", href=True):
+            href = a["href"]
+            # If it's a proxy.php?link=... link, replace with direct link
+            if "proxy.php?link=" in href:
+                match = re.search(r'link=([^&]+)', href)
+                if match:
+                    real_url = urllib.parse.unquote(match.group(1))
+                    a["href"] = real_url
+                    a.string = real_url
+            else:
+                a.string = a["href"]
+        # Get all text content (including from <br>)
+        # We'll convert <br> to newlines, then collapse to a single string
+        text = aside.get_text(separator="\n", strip=True)
+        # Wrap the text in [ ... ] and <br> before and after
+        replacement = f"<br><br>[<i>{text}</i>]<br>"
+        logger.debug("Replaced <aside class='message-signature'>…</aside> with: %r", replacement)
+        logger.debug(f"Unwrapping tags, allowed: {ALLOWED_TAGS}")
+        aside.replace_with(BeautifulSoup(replacement, "html.parser"))
+
+    for a in soup.find_all("a", role="button"):
+        if a.get_text(strip=True).lower() == "click to expand...":
+            a.decompose()
+            logger.debug("Removed <a role='button'>Click to expand...</a>")
 
 
     # ── ADD SNIPPET: Flatten “Important Information” header ───────────────
